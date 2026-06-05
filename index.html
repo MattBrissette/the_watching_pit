@@ -1,0 +1,1457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Watching Pit - Horror Physics Simulation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Creepster&family=Special+Elite&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Special Elite', monospace;
+            margin: 0;
+            overflow: hidden;
+            background-color: #050508;
+            user-select: none;
+            touch-action: none;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        /* Horror theme styling */
+        .horror-panel {
+            background: rgba(10, 10, 14, 0.92);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(139, 0, 0, 0.4);
+            box-shadow: 0 0 25px rgba(0, 0, 0, 0.95), inset 0 0 15px rgba(139, 0, 0, 0.25);
+        }
+        .horror-text-glow {
+            text-shadow: 0 0 8px rgba(239, 68, 68, 0.7);
+        }
+        /* CRT overlay lines */
+        .crt-overlay {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%);
+            background-size: 100% 4px;
+            z-index: 5;
+            opacity: 0.35;
+        }
+        /* Aggressive Pulsing Vignette */
+        .vignette-overlay {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background: radial-gradient(circle, transparent 25%, rgba(0, 0, 0, 0.82) 80%, rgba(0, 0, 0, 0.98) 100%);
+            z-index: 4;
+            mix-blend-mode: multiply;
+            animation: vignette-breath 7s ease-in-out infinite alternate;
+        }
+        @keyframes vignette-breath {
+            0% {
+                opacity: 0.88;
+                transform: scale(1.0);
+            }
+            100% {
+                opacity: 1.0;
+                transform: scale(1.02);
+            }
+        }
+    </style>
+</head>
+<body class="relative w-screen h-screen select-none overflow-hidden">
+
+    <div class="crt-overlay"></div>
+    <div class="vignette-overlay"></div>
+
+    <!-- Top Left Corner: Clean Branding (No panel, background, or flashing ping) -->
+    <div class="absolute top-6 left-6 z-10 pointer-events-none">
+        <h1 class="text-2xl font-bold tracking-widest text-red-600 horror-text-glow font-['Creepster'] select-none">THE WATCHING PIT</h1>
+    </div>
+
+    <!-- Top Right Corner: Wash, Agitate Buttons (Adjusted top/right spacing to align with title) -->
+    <div class="absolute top-6 right-6 z-10 flex gap-2 items-center">
+        <button id="btn-clean" class="horror-panel bg-zinc-950/40 hover:bg-zinc-900/60 text-zinc-300 font-semibold py-2 px-5 rounded-xl border border-zinc-800 hover:border-zinc-700 transition duration-200 text-xs active:scale-95 shadow-xl">
+            Wash
+        </button>
+        <button id="btn-shake" class="horror-panel bg-red-950/30 hover:bg-red-900/40 text-red-200 font-semibold py-2 px-5 rounded-xl border border-red-900/60 hover:border-red-600 transition duration-200 text-xs active:scale-95 shadow-xl">
+            Agitate
+        </button>
+    </div>
+
+    <!-- Dungeon Loader -->
+    <div id="loader" class="absolute inset-0 z-50 bg-[#07070a] flex flex-col items-center justify-center text-zinc-400 transition-opacity duration-1000">
+        <div class="relative w-16 h-16 mb-4">
+            <div class="absolute inset-0 border border-red-950 rounded-full"></div>
+            <div class="absolute inset-0 border-t-2 border-red-600 rounded-full animate-spin"></div>
+        </div>
+        <h2 class="text-sm font-semibold tracking-widest text-red-600 horror-text-glow font-['Creepster'] text-lg">OPENING THE CONTAINER...</h2>
+        <p class="text-[10px] text-zinc-600 mt-2 font-mono">Drawing bloodshot scleras & irises...</p>
+    </div>
+
+    <!-- ThreeJS & CannonJS Framework Dependencies -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+
+    <script>
+        const CONFIG = {
+            roomWidth: 12,
+            roomHeight: 12,
+            roomDepth: 12,
+            ballRadius: 0.62, // Larger eyeball geometries
+            ballCount: 140,
+            maxSplatters: 250 // Performance-tuned cap
+        };
+
+        let scene, camera, renderer, world;
+        let eyeballs = [];
+        let splatters = [];
+        let bloodDrops = [];
+        let activeRipples = []; // Dynamic ripples tracker
+        let mouse = new THREE.Vector2();
+        let targetMouse = new THREE.Vector2();
+        let raycaster = new THREE.Raycaster();
+
+        // Physics variables
+        let wallPhysicsMat, ballPhysicsMat;
+        let dragJoint = null;
+        let dummyBody = null;
+        let dragPlane = new THREE.Plane();
+        let planeNormal = new THREE.Vector3();
+        let intersectionPoint = new THREE.Vector3();
+        let currentlyDraggedBody = null;
+
+        // Visual blood variables
+        let bloodLevel = -5.9; // Minimum visible blood floor
+        const bloodMaxY = 3.5;  // Submersion cap
+        let bleedMultiplier = 0.2; // Adjusted to 0.2x by default
+        let isCeilingDelugeActive = true; // Enabled by default
+        let bloodPoolMesh;
+        let splatTextures = [];
+        let dripTrailTexture; // Tapered real drip shape
+
+        // Lighting & meshes
+        let mainCeilingLight, ambientLight, neonLight, floorBounceLight;
+        let lightTubeMesh, neonTubeMesh, neonBracket, neonCageGroup;
+
+        window.onload = function() {
+            initSplatTextures();
+            initDripTrailTexture();
+            initPhysics();
+            initThree();
+            createDungeonRoom();
+            spawnEyeballs();
+            createBloodPool();
+            setupInteractions();
+            
+            // Synchronize starting lighting based on initial bloodLevel
+            adjustBloodVolume(0);
+            
+            animate();
+            
+            setTimeout(() => {
+                const loader = document.getElementById('loader');
+                if (loader) {
+                    loader.classList.add('opacity-0');
+                    setTimeout(() => loader.remove(), 1000);
+                }
+            }, 600);
+        };
+
+        function initPhysics() {
+            world = new CANNON.World();
+            world.gravity.set(0, -15, 0); // Heavy, oppressive gravity
+            world.broadphase = new CANNON.NaiveBroadphase();
+            world.solver.iterations = 10;
+            
+            wallPhysicsMat = new CANNON.Material('wallMaterial');
+            ballPhysicsMat = new CANNON.Material('ballMaterial');
+
+            const ballWallContact = new CANNON.ContactMaterial(ballPhysicsMat, wallPhysicsMat, {
+                friction: 0.35,
+                restitution: 0.15 // Sticky, heavy collision feels
+            });
+            const ballBallContact = new CANNON.ContactMaterial(ballPhysicsMat, ballPhysicsMat, {
+                friction: 0.45,
+                restitution: 0.2
+            });
+
+            world.addContactMaterial(ballWallContact);
+            world.addContactMaterial(ballBallContact);
+
+            dummyBody = new CANNON.Body({ mass: 0 });
+            dummyBody.collisionFilterGroup = 0;
+            dummyBody.collisionFilterMask = 0;
+            world.addBody(dummyBody);
+        }
+
+        function initSplatTextures() {
+            const colors = ['#8f0404', '#590101', '#b30505'];
+            for (let t = 0; t < 5; t++) {
+                const canvas = document.createElement('canvas');
+                canvas.width = 128;
+                canvas.height = 128;
+                const ctx = canvas.getContext('2d');
+                
+                ctx.fillStyle = 'rgba(0,0,0,0)';
+                ctx.fillRect(0, 0, 128, 128);
+
+                const cx = 64, cy = 64;
+                
+                if (t === 0) {
+                    ctx.fillStyle = colors[0];
+                    // Splat core with fine surrounding splashes
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, 22, 0, Math.PI * 2);
+                    ctx.fill();
+                    for (let i = 0; i < 14; i++) {
+                        const angle = Math.random() * Math.PI * 2;
+                        const r = 25 + Math.random() * 32;
+                        ctx.beginPath();
+                        ctx.arc(cx + Math.cos(angle)*r, cy + Math.sin(angle)*r, 1.5 + Math.random()*3.5, 0, Math.PI*2);
+                        ctx.fill();
+                        
+                        // Splat strings
+                        ctx.beginPath();
+                        ctx.moveTo(cx, cy);
+                        ctx.lineTo(cx + Math.cos(angle)*(r*0.65), cy + Math.sin(angle)*(r*0.65));
+                        ctx.strokeStyle = colors[0];
+                        ctx.lineWidth = 1.2;
+                        ctx.stroke();
+                    }
+                } else if (t === 1) {
+                    ctx.fillStyle = colors[1];
+                    // Explosive branching impact splat
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, 16, 0, Math.PI * 2);
+                    ctx.fill();
+                    for (let i = 0; i < 7; i++) {
+                        const angle = Math.random() * Math.PI * 2;
+                        const length = 18 + Math.random() * 36;
+                        ctx.beginPath();
+                        ctx.moveTo(cx, cy);
+                        ctx.lineTo(cx + Math.cos(angle)*length, cy + Math.sin(angle)*length);
+                        ctx.lineWidth = 4 + Math.random()*3;
+                        ctx.lineCap = 'round';
+                        ctx.strokeStyle = colors[1];
+                        ctx.stroke();
+                    }
+                } else if (t === 2) {
+                    ctx.fillStyle = colors[2];
+                    // Dripping downward runoff pattern
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, 19, 0, Math.PI * 2);
+                    ctx.fill();
+                    for (let i = 0; i < 4; i++) {
+                        const dx = cx - 14 + i * 10 + (Math.random() - 0.5)*4;
+                        const dy = cy;
+                        const dlen = 20 + Math.random() * 35;
+                        ctx.beginPath();
+                        ctx.moveTo(dx, dy);
+                        ctx.lineTo(dx, dy + dlen);
+                        ctx.lineWidth = 3 + Math.random()*3;
+                        ctx.lineCap = 'round';
+                        ctx.strokeStyle = colors[2];
+                        ctx.stroke();
+                    }
+                } else if (t === 3) {
+                    // Fine arterial spray pattern
+                    ctx.fillStyle = colors[2];
+                    for (let i = 0; i < 45; i++) {
+                        const angle = -Math.PI / 4 + (Math.random() - 0.5) * 0.45;
+                        const dist = Math.random() * 50 + 4;
+                        const x = cx + Math.cos(angle) * dist + (Math.random() - 0.5) * 6;
+                        const y = cy + Math.sin(angle) * dist + (Math.random() - 0.5) * 6;
+                        const size = 0.5 + Math.random() * 2.2;
+                        ctx.beginPath();
+                        ctx.arc(x, y, size, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, 10, 0, Math.PI * 2);
+                    ctx.fill();
+                } else if (t === 4) {
+                    // Panic smeared handprint / dragging slide blotch
+                    ctx.fillStyle = colors[0];
+                    ctx.beginPath();
+                    ctx.ellipse(cx, cy + 10, 18, 12, Math.PI / 12, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    const fingerOffsetsX = [-14, -7, 0, 7, 14];
+                    for (let f = 0; f < 5; f++) {
+                        const startX = cx + fingerOffsetsX[f];
+                        const startY = cy + 5;
+                        const streakLength = 35 + Math.random() * 20;
+                        
+                        ctx.beginPath();
+                        ctx.moveTo(startX - 2.5, startY);
+                        ctx.lineTo(startX + 2.5, startY);
+                        ctx.lineTo(startX + 1.2, startY + streakLength);
+                        ctx.lineTo(startX - 1.2, startY + streakLength);
+                        ctx.closePath();
+                        ctx.fill();
+                        
+                        ctx.beginPath();
+                        ctx.arc(startX, startY + streakLength, 1.8 + Math.random() * 1.5, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+                const texture = new THREE.CanvasTexture(canvas);
+                splatTextures.push(texture);
+            }
+        }
+
+        function initDripTrailTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = 'rgba(0,0,0,0)';
+            ctx.fillRect(0, 0, 64, 128);
+
+            const grad = ctx.createLinearGradient(32, 10, 32, 110);
+            grad.addColorStop(0, '#500101');
+            grad.addColorStop(0.7, '#910404');
+            grad.addColorStop(1, '#cb0505');
+
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.moveTo(32, 10);
+            ctx.bezierCurveTo(28, 40, 16, 80, 16, 100);
+            ctx.arc(32, 100, 16, Math.PI, 0, true);
+            ctx.bezierCurveTo(48, 80, 36, 40, 32, 10);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+            ctx.beginPath();
+            ctx.ellipse(26, 96, 4, 8, -Math.PI/6, 0, Math.PI * 2);
+            ctx.fill();
+
+            dripTrailTexture = new THREE.CanvasTexture(canvas);
+        }
+
+        function createWallTexture(type) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 1024;
+            canvas.height = 1024;
+            const ctx = canvas.getContext('2d');
+
+            ctx.fillStyle = '#1c1c22';
+            ctx.fillRect(0, 0, 1024, 1024);
+
+            for (let i = 0; i < 40000; i++) {
+                const x = Math.random() * 1024;
+                const y = Math.random() * 1024;
+                const size = Math.random() * 2 + 1;
+                const colorVal = Math.floor(Math.random() * 20);
+                ctx.fillStyle = `rgba(${colorVal}, ${colorVal + 5}, ${colorVal + 10}, 0.25)`;
+                ctx.fillRect(x, y, size, size);
+            }
+
+            for (let i = 0; i < 45; i++) {
+                const x = Math.random() * 1024;
+                const y = Math.random() * 1024;
+                const r = Math.random() * 200 + 50;
+                const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+                grad.addColorStop(0, 'rgba(5, 12, 5, 0.45)');
+                grad.addColorStop(0.5, 'rgba(10, 10, 12, 0.2)');
+                grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.arc(x, y, r, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            ctx.fillStyle = 'rgba(145, 4, 4, 0.95)';
+            
+            for (let drip = 0; drip < 18; drip++) {
+                const startX = Math.random() * 1024;
+                const dripLen = Math.random() * 450 + 100;
+                ctx.beginPath();
+                ctx.moveTo(startX - 8, 0);
+                ctx.quadraticCurveTo(startX, dripLen, startX + 8, 0);
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.arc(startX, dripLen - 5, Math.random() * 10 + 5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            for (let s = 0; s < 60; s++) {
+                const x = Math.random() * 1024;
+                const y = Math.random() * 1024;
+                const size = Math.random() * 15 + 4;
+                ctx.beginPath();
+                ctx.arc(x, y, size, 0, Math.PI * 2);
+                ctx.fill();
+
+                for (let t = 0; t < 5; t++) {
+                    ctx.beginPath();
+                    ctx.moveTo(x, y);
+                    ctx.lineTo(x + (Math.random() - 0.5) * size * 3, y + Math.random() * size * 3);
+                    ctx.strokeStyle = 'rgba(145, 4, 4, 0.75)';
+                    ctx.lineWidth = size * 0.3;
+                    ctx.stroke();
+                }
+            }
+
+            if (type === 'back') {
+                ctx.strokeStyle = 'rgba(180, 5, 5, 0.98)';
+                ctx.lineWidth = 6;
+                ctx.font = '75px "Special Elite", monospace';
+                ctx.strokeText('THEY WATCH', 250, 420);
+                ctx.strokeText('✝', 800, 200);
+                ctx.strokeText('☠', 150, 750);
+                
+                ctx.beginPath();
+                ctx.moveTo(500, 700); ctx.lineTo(500, 780);
+                ctx.moveTo(520, 700); ctx.lineTo(520, 780);
+                ctx.moveTo(540, 700); ctx.lineTo(540, 780);
+                ctx.moveTo(560, 700); ctx.lineTo(560, 780);
+                ctx.moveTo(480, 760); ctx.lineTo(580, 720); // Strike-through
+                ctx.stroke();
+            }
+
+            const texture = new THREE.CanvasTexture(canvas);
+            return texture;
+        }
+
+        function createEyeballTexture(typeIndex) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 512;
+            canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+
+            const midX = 256;
+            const midY = 128;
+
+            ctx.fillStyle = '#dbd4ca';
+            ctx.fillRect(0, 0, 512, 256);
+
+            let scleraGrad = ctx.createRadialGradient(midX, midY, 60, midX, midY, 250);
+            scleraGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+            scleraGrad.addColorStop(0.7, 'rgba(110, 35, 35, 0.25)');
+            scleraGrad.addColorStop(1, 'rgba(0, 0, 0, 0.85)');
+            ctx.fillStyle = scleraGrad;
+            ctx.fillRect(0, 0, 512, 256);
+
+            ctx.strokeStyle = 'rgba(150, 8, 8, 0.9)';
+            ctx.lineWidth = 1.3;
+            for (let i = 0; i < 50; i++) {
+                ctx.beginPath();
+                const angle = Math.random() * Math.PI * 2;
+                const startR = 55; 
+                const endR = 220;
+                
+                let cx = midX + Math.cos(angle) * startR;
+                let cy = midY + Math.sin(angle) * startR;
+                ctx.moveTo(cx, cy);
+
+                const segments = 5;
+                for (let j = 0; j < segments; j++) {
+                    const currentR = startR + (endR - startR) * (j / segments);
+                    const variance = (Math.random() - 0.5) * 22;
+                    const nextX = midX + Math.cos(angle) * currentR + variance;
+                    const nextY = midY + Math.sin(angle) * currentR + variance;
+                    ctx.lineTo(nextX, nextY);
+                }
+                ctx.stroke();
+            }
+
+            let irisRadius = 55;
+            let irisGrad = ctx.createRadialGradient(midX, midY, 0, midX, midY, irisRadius);
+
+            if (typeIndex === 0) {
+                irisGrad.addColorStop(0, '#011c1e');
+                irisGrad.addColorStop(0.5, '#005f73');
+                irisGrad.addColorStop(0.8, '#0a9396');
+                irisGrad.addColorStop(1, '#001219');
+            } else if (typeIndex === 1) {
+                irisGrad.addColorStop(0, '#801a1a');
+                irisGrad.addColorStop(0.4, '#e9d8a6');
+                irisGrad.addColorStop(0.9, '#dd8000');
+                irisGrad.addColorStop(1, '#000000');
+            } else if (typeIndex === 2) {
+                irisGrad.addColorStop(0, '#000000');
+                irisGrad.addColorStop(0.3, '#39ff14');
+                irisGrad.addColorStop(0.7, '#004b23');
+                irisGrad.addColorStop(1, '#000000');
+            } else {
+                irisGrad.addColorStop(0, '#ffffff');
+                irisGrad.addColorStop(0.3, '#ff0033');
+                irisGrad.addColorStop(0.8, '#4a081a');
+                irisGrad.addColorStop(1, '#080002');
+            }
+
+            ctx.fillStyle = irisGrad;
+            ctx.beginPath();
+            ctx.arc(midX, midY, irisRadius, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+            ctx.lineWidth = 1.5;
+            for (let f = 0; f < 360; f += 6) {
+                const rad = (f * Math.PI) / 180;
+                ctx.beginPath();
+                ctx.moveTo(midX + Math.cos(rad) * 15, midY + Math.sin(rad) * 15);
+                ctx.lineTo(midX + Math.cos(rad) * irisRadius, midY + Math.sin(rad) * irisRadius);
+                ctx.stroke();
+            }
+
+            ctx.fillStyle = '#000000';
+            ctx.beginPath();
+            if (typeIndex === 1) {
+                ctx.ellipse(midX, midY, 8, 38, 0, 0, Math.PI * 2);
+            } else {
+                ctx.arc(midX, midY, 20, 0, Math.PI * 2);
+            }
+            ctx.fill();
+
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+            ctx.beginPath();
+            ctx.ellipse(midX - 18, midY - 18, 12, 6, Math.PI / 4, 0, Math.PI * 2);
+            ctx.fill();
+
+            const texture = new THREE.CanvasTexture(canvas);
+            return texture;
+        }
+
+        function initThree() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x020204);
+            scene.fog = new THREE.FogExp2(0x020204, 0.055);
+
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 0, 15);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.15; 
+            document.body.appendChild(renderer.domElement);
+
+            ambientLight = new THREE.AmbientLight(0xffffff, 0.08);
+            scene.add(ambientLight);
+
+            mainCeilingLight = new THREE.SpotLight(0xddf0ff, 2.0, 35, Math.PI / 3, 0.7, 1.0);
+            mainCeilingLight.position.set(0, CONFIG.roomHeight / 2 - 0.4, 0);
+            mainCeilingLight.castShadow = true;
+            mainCeilingLight.shadow.mapSize.width = 1024;
+            mainCeilingLight.shadow.mapSize.height = 1024;
+            mainCeilingLight.shadow.camera.near = 0.5;
+            mainCeilingLight.shadow.camera.far = CONFIG.roomHeight + 2;
+            mainCeilingLight.shadow.bias = -0.002;
+            scene.add(mainCeilingLight);
+        }
+
+        function createDungeonRoom() {
+            const hw = CONFIG.roomWidth / 2;
+            const hh = CONFIG.roomHeight / 2;
+            const hd = CONFIG.roomDepth / 2;
+            const wallThickness = 1;
+
+            const backTex = createWallTexture('back');
+            const sideTexLeft = createWallTexture('left');
+            const sideTexRight = createWallTexture('right');
+            const otherTex = createWallTexture('other');
+
+            const matLeft = new THREE.MeshStandardMaterial({ map: sideTexLeft, roughness: 0.5, metalness: 0.1 });
+            const matRight = new THREE.MeshStandardMaterial({ map: sideTexRight, roughness: 0.5, metalness: 0.1 });
+            const matBack = new THREE.MeshStandardMaterial({ map: backTex, roughness: 0.6, metalness: 0.1 });
+            const matFloor = new THREE.MeshStandardMaterial({ map: otherTex, roughness: 0.8, metalness: 0.05 });
+            const matCeiling = new THREE.MeshStandardMaterial({ map: otherTex, roughness: 0.7, metalness: 0.1 });
+
+            const walls = [
+                { size: [CONFIG.roomWidth, CONFIG.roomHeight, wallThickness], pos: [0, 0, -hd], mat: matBack },
+                { size: [wallThickness, CONFIG.roomHeight, CONFIG.roomDepth], pos: [-hw, 0, 0], mat: matLeft },
+                { size: [wallThickness, CONFIG.roomHeight, CONFIG.roomDepth], pos: [hw, 0, 0], mat: matRight },
+                { size: [CONFIG.roomWidth, wallThickness, CONFIG.roomDepth], pos: [0, -hh, 0], mat: matFloor },
+                { size: [CONFIG.roomWidth, wallThickness, CONFIG.roomDepth], pos: [0, hh, 0], mat: matCeiling }
+            ];
+
+            walls.forEach(wallDef => {
+                const geo = new THREE.BoxGeometry(...wallDef.size);
+                const mesh = new THREE.Mesh(geo, wallDef.mat);
+                mesh.position.set(...wallDef.pos);
+                mesh.receiveShadow = true;
+                scene.add(mesh);
+
+                const halfExtents = new CANNON.Vec3(wallDef.size[0] / 2, wallDef.size[1] / 2, wallDef.size[2] / 2);
+                const shape = new CANNON.Box(halfExtents);
+                const body = new CANNON.Body({
+                    mass: 0,
+                    shape: shape,
+                    material: wallPhysicsMat
+                });
+                body.position.set(...wallDef.pos);
+                world.addBody(body);
+            });
+
+            const frontShape = new CANNON.Box(new CANNON.Vec3(hw, hh, wallThickness / 2));
+            const frontBody = new CANNON.Body({
+                mass: 0,
+                shape: frontShape,
+                material: wallPhysicsMat
+            });
+            frontBody.position.set(0, 0, hd + wallThickness / 2);
+            world.addBody(frontBody);
+
+            const tubeGeo = new THREE.CylinderGeometry(0.08, 0.08, 5, 12);
+            tubeGeo.rotateZ(Math.PI / 2); 
+            const tubeMat = new THREE.MeshBasicMaterial({ color: 0xe0f3ff });
+            lightTubeMesh = new THREE.Mesh(tubeGeo, tubeMat);
+            lightTubeMesh.position.set(0, hh - 0.2, 0);
+            scene.add(lightTubeMesh);
+
+            const bracketGeo = new THREE.BoxGeometry(5.2, 0.15, 0.35);
+            const bracketMat = new THREE.MeshStandardMaterial({ color: 0x222226, roughness: 0.8 });
+            const bracket = new THREE.Mesh(bracketGeo, bracketMat);
+            bracket.position.set(0, hh - 0.1, 0);
+            scene.add(bracket);
+
+            const neonBracketGeo = new THREE.BoxGeometry(5.2, 0.35, 0.15);
+            const neonBracketMat = new THREE.MeshStandardMaterial({ 
+                color: 0x141419, 
+                roughness: 0.8, 
+                metalness: 0.5 
+            });
+            neonBracket = new THREE.Mesh(neonBracketGeo, neonBracketMat);
+            neonBracket.position.set(0, 3.2, -5.45);
+            neonBracket.receiveShadow = true;
+            scene.add(neonBracket);
+
+            const neonGeo = new THREE.CylinderGeometry(0.065, 0.065, 5.0, 16);
+            neonGeo.rotateZ(Math.PI / 2);
+            const neonMat = new THREE.MeshStandardMaterial({ 
+                color: 0xff0044, 
+                emissive: 0xff0022,
+                emissiveIntensity: 5.0,
+                transparent: true,
+                opacity: 0.8,
+                roughness: 0.05
+            });
+            neonTubeMesh = new THREE.Mesh(neonGeo, neonMat);
+            neonTubeMesh.position.set(0, 3.2, -5.35);
+            scene.add(neonTubeMesh);
+
+            const coreGeo = new THREE.CylinderGeometry(0.015, 0.015, 4.95, 8);
+            coreGeo.rotateZ(Math.PI / 2);
+            const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            const coreMesh = new THREE.Mesh(coreGeo, coreMat);
+            neonTubeMesh.add(coreMesh);
+
+            neonCageGroup = new THREE.Group();
+            const cageMat = new THREE.MeshStandardMaterial({
+                color: 0x18181f,
+                roughness: 0.7,
+                metalness: 0.85
+            });
+
+            const ribCount = 13;
+            const ribGeo = new THREE.TorusGeometry(0.2, 0.012, 6, 24, Math.PI);
+            for (let i = 0; i < ribCount; i++) {
+                const x = -2.4 + (i / (ribCount - 1)) * 4.8;
+                const ribMesh = new THREE.Mesh(ribGeo, cageMat);
+                ribMesh.position.set(x, 3.2, -5.45);
+                ribMesh.rotation.y = Math.PI / 2;
+                ribMesh.castShadow = true;
+                ribMesh.receiveShadow = true;
+                neonCageGroup.add(ribMesh);
+            }
+
+            const railLength = 4.95;
+            const railGeo = new THREE.CylinderGeometry(0.01, 0.01, railLength, 8);
+            railGeo.rotateZ(Math.PI / 2);
+
+            const railMid = new THREE.Mesh(railGeo, cageMat);
+            railMid.position.set(0, 3.2, -5.25);
+            railMid.castShadow = true;
+            railMid.receiveShadow = true;
+            neonCageGroup.add(railMid);
+
+            const railTop = new THREE.Mesh(railGeo, cageMat);
+            railTop.position.set(0, 3.34, -5.31);
+            railTop.castShadow = true;
+            railTop.receiveShadow = true;
+            neonCageGroup.add(railTop);
+
+            const railBottom = new THREE.Mesh(railGeo, cageMat);
+            railBottom.position.set(0, 3.06, -5.31);
+            railBottom.castShadow = true;
+            railBottom.receiveShadow = true;
+            neonCageGroup.add(railBottom);
+
+            scene.add(neonCageGroup);
+
+            neonLight = new THREE.PointLight(0xff1e56, 3.5, 20);
+            neonLight.position.set(0, 3.2, -5.25);
+            neonLight.castShadow = true;
+            neonLight.shadow.mapSize.width = 2048;
+            neonLight.shadow.mapSize.height = 2048;
+            neonLight.shadow.camera.near = 0.05;
+            neonLight.shadow.camera.far = 15;
+            neonLight.shadow.bias = -0.001;
+            scene.add(neonLight);
+
+            const cornerRimLeft = new THREE.PointLight(0x3d0000, 0.6, 8);
+            cornerRimLeft.position.set(-CONFIG.roomWidth / 2 + 0.8, CONFIG.roomHeight / 2 - 1.2, -CONFIG.roomDepth / 2 + 0.8);
+            scene.add(cornerRimLeft);
+
+            const cornerRimRight = new THREE.PointLight(0x3d0000, 0.6, 8);
+            cornerRimRight.position.set(CONFIG.roomWidth / 2 - 0.8, CONFIG.roomHeight / 2 - 1.2, -CONFIG.roomDepth / 2 + 0.8);
+            scene.add(cornerRimRight);
+
+            floorBounceLight = new THREE.PointLight(0xff0000, 0.5, 12);
+            floorBounceLight.position.set(0, bloodLevel + 0.5, 0);
+            scene.add(floorBounceLight);
+        }
+
+        function createBloodPool() {
+            const hw = CONFIG.roomWidth;
+            const hd = CONFIG.roomDepth;
+            
+            const poolGeo = new THREE.PlaneGeometry(hw, hd, 100, 100);
+            poolGeo.rotateX(-Math.PI / 2);
+
+            const poolMat = new THREE.MeshStandardMaterial({
+                color: 0x3b0000,
+                emissive: 0x3a0000,
+                emissiveIntensity: 0.1,
+                roughness: 0.02, 
+                metalness: 0.1,
+                transparent: true,
+                opacity: 0.92,
+                flatShading: false
+            });
+
+            poolMat.userData = { time: { value: 0 } };
+            poolMat.onBeforeCompile = (shader) => {
+                shader.uniforms.uTime = poolMat.userData.time;
+
+                shader.vertexShader = `
+                    varying vec3 vWorldPosition;
+                ` + shader.vertexShader;
+
+                shader.vertexShader = shader.vertexShader.replace(
+                    '#include <worldpos_vertex>',
+                    `
+                    #include <worldpos_vertex>
+                    vWorldPosition = worldPosition.xyz;
+                    `
+                );
+
+                shader.fragmentShader = `
+                    uniform float uTime;
+                    varying vec3 vWorldPosition;
+                ` + shader.fragmentShader;
+
+                shader.fragmentShader = shader.fragmentShader.replace(
+                    '#include <emissivemap_fragment>',
+                    `
+                    #include <emissivemap_fragment>
+                    
+                    vec3 worldNormal = normalize(inverseTransformDirection(geometryNormal, viewMatrix));
+                    vec3 worldView = normalize(vWorldPosition - cameraPosition);
+                    vec3 R = reflect(worldView, worldNormal);
+                    
+                    float neonY = 3.2;
+                    float neonZ = -5.35;
+                    
+                    if (R.y > 0.01) {
+                        float dy = neonY - vWorldPosition.y;
+                        vec3 I = vWorldPosition + R * (dy / R.y);
+                        float t_seg = clamp(I.x, -2.5, 2.5);
+                        vec3 closestPoint = vec3(t_seg, neonY, neonZ);
+                        float dist = distance(I, closestPoint);
+                        
+                        float reflectionGlow = smoothstep(1.8, 0.0, dist) * 1.2;
+                        reflectionGlow += smoothstep(0.35, 0.0, dist) * 4.0;
+                        
+                        reflectionGlow *= smoothstep(0.0, 0.15, R.y);
+                        
+                        vec3 neonReflectionColor = vec3(1.0, 0.0, 0.1) * reflectionGlow;
+                        totalEmissiveRadiance += neonReflectionColor;
+                    }
+                    
+                    float borderDistX = 6.0 - abs(vWorldPosition.x);
+                    float borderDistZ = 6.0 - abs(vWorldPosition.z);
+                    float borderDist = min(borderDistX, borderDistZ);
+                    
+                    float pulse = 0.85 + 0.15 * sin(vWorldPosition.x * 1.5 + vWorldPosition.z * 1.5 + uTime * 3.5);
+                    float rimGlow = smoothstep(0.28, 0.01, borderDist) * 1.8 * pulse;
+                    
+                    totalEmissiveRadiance += vec3(0.7, 0.01, 0.03) * rimGlow;
+                    `
+                );
+            };
+
+            bloodPoolMesh = new THREE.Mesh(poolGeo, poolMat);
+            bloodPoolMesh.position.set(0, bloodLevel, 0);
+            scene.add(bloodPoolMesh);
+        }
+
+        function spawnSplatter(position, normal, size) {
+            const texIdx = Math.floor(Math.random() * splatTextures.length);
+            const splatGeo = new THREE.CircleGeometry(size, 16);
+            const splatMat = new THREE.MeshBasicMaterial({
+                map: splatTextures[texIdx],
+                transparent: true,
+                opacity: 0.9,
+                depthWrite: false,
+                side: THREE.DoubleSide
+            });
+
+            const splat = new THREE.Mesh(splatGeo, splatMat);
+            const offsetPos = position.clone().add(normal.clone().multiplyScalar(0.015));
+            splat.position.copy(offsetPos);
+            
+            const lookAtTarget = offsetPos.clone().add(normal);
+            splat.lookAt(lookAtTarget);
+
+            scene.add(splat);
+            splatters.push({
+                mesh: splat,
+                creationTime: Date.now(),
+                normal: normal.clone(),
+                size: size,
+                dripDistanceAccumulator: 0,
+                dripVelocity: normal.y < 0.5 && Math.abs(normal.y) < 0.8 ? 0.004 + Math.random() * 0.006 : 0
+            });
+
+            if (splatters.length > CONFIG.maxSplatters) {
+                const oldest = splatters.shift();
+                scene.remove(oldest.mesh);
+                oldest.mesh.geometry.dispose();
+                oldest.mesh.material.dispose();
+            }
+        }
+
+        function spawnTrailDroplet(position, normal, size, opacity) {
+            const splatGeo = new THREE.PlaneGeometry(size, size * 2.2);
+            const splatMat = new THREE.MeshBasicMaterial({
+                map: dripTrailTexture,
+                transparent: true,
+                opacity: opacity,
+                depthWrite: false,
+                side: THREE.DoubleSide
+            });
+            const splat = new THREE.Mesh(splatGeo, splatMat);
+            const offsetPos = position.clone().add(normal.clone().multiplyScalar(0.012));
+            splat.position.copy(offsetPos);
+            
+            const lookAtTarget = offsetPos.clone().add(normal);
+            splat.lookAt(lookAtTarget);
+
+            scene.add(splat);
+            splatters.push({
+                mesh: splat,
+                creationTime: Date.now(),
+                normal: normal.clone(),
+                size: size,
+                dripVelocity: 0
+            });
+        }
+
+        function addRipple(x, z, strength) {
+            activeRipples.push({
+                x: x,
+                z: z,
+                time: 0,
+                strength: strength,
+                maxLife: 2.2
+            });
+        }
+
+        function spawnBloodDrop(position, velocity = null) {
+            const size = 0.04 + Math.random() * 0.06;
+            const dropGeo = new THREE.SphereGeometry(size, 8, 8);
+            
+            const dropColors = [0x3d0000, 0x8b0000, 0x1a0000];
+            const chosenColor = dropColors[Math.floor(Math.random() * dropColors.length)];
+            
+            const dropMat = new THREE.MeshBasicMaterial({ color: chosenColor });
+            const dropMesh = new THREE.Mesh(dropGeo, dropMat);
+            
+            dropMesh.scale.set(1.0, 2.2, 1.0);
+            
+            dropMesh.position.copy(position);
+            scene.add(dropMesh);
+
+            const velVec = velocity ? velocity.clone() : new THREE.Vector3(
+                (Math.random() - 0.5) * 1.5,
+                (Math.random() - 0.2) * 1.0,
+                (Math.random() - 0.5) * 1.5
+            );
+
+            bloodDrops.push({
+                mesh: dropMesh,
+                velocity: velVec,
+                creationTime: Date.now(),
+                lifeSpan: 2000 + Math.random() * 1000
+            });
+        }
+
+        function triggerBloodBurst(position, count = 6) {
+            for (let i = 0; i < count; i++) {
+                const vel = new THREE.Vector3(
+                    (Math.random() - 0.5) * 6,
+                    (Math.random() * 3) + 2,
+                    (Math.random() - 0.5) * 6
+                );
+                spawnBloodDrop(position, vel);
+            }
+        }
+
+        function spawnEyeballs() {
+            eyeballs.forEach(item => {
+                scene.remove(item.mesh);
+                world.remove(item.body);
+            });
+            eyeballs = [];
+
+            const sphereGeo = new THREE.SphereGeometry(CONFIG.ballRadius, 32, 32);
+
+            const eyeTextures = [
+                createEyeballTexture(0), // Human Blue
+                createEyeballTexture(1), // Cat Golden Yellow
+                createEyeballTexture(2), // Neon Glowing Green
+                createEyeballTexture(3)  // Fiery Demon Red
+            ];
+
+            for (let i = 0; i < CONFIG.ballCount; i++) {
+                const breedIndex = Math.floor(Math.random() * eyeTextures.length);
+                const ballMat = new THREE.MeshStandardMaterial({
+                    map: eyeTextures[breedIndex],
+                    roughness: 0.02, 
+                    metalness: 0.15, 
+                });
+
+                if (breedIndex === 2) {
+                    ballMat.emissive = new THREE.Color(0x156000);
+                    ballMat.emissiveIntensity = 0.55;
+                } else if (breedIndex === 3) {
+                    ballMat.emissive = new THREE.Color(0x350005);
+                    ballMat.emissiveIntensity = 0.35;
+                }
+
+                const mesh = new THREE.Mesh(sphereGeo, ballMat);
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                scene.add(mesh);
+
+                const shape = new CANNON.Sphere(CONFIG.ballRadius);
+                const body = new CANNON.Body({
+                    mass: 1.5,
+                    shape: shape,
+                    material: ballPhysicsMat,
+                    linearDamping: 0.25,
+                    angularDamping: 0.3
+                });
+
+                const rx = CONFIG.roomWidth - CONFIG.ballRadius * 4;
+                const rz = CONFIG.roomDepth - CONFIG.ballRadius * 4;
+
+                const posX = (Math.random() - 0.5) * rx;
+                const posY = -3 + (Math.random() * 5); 
+                const posZ = (Math.random() - 0.5) * rz;
+
+                body.position.set(posX, posY, posZ);
+
+                body.angularVelocity.set(
+                    Math.random() * 0.5,
+                    Math.random() * 0.5,
+                    Math.random() * 0.5
+                );
+
+                body.addEventListener('collide', (e) => {
+                    const contact = e.contact;
+                    if (!contact) return;
+
+                    const impactVel = contact.getImpactVelocityAlongNormal();
+                    if (impactVel > 1.2) {
+                        eyeballItem.bloodiness = Math.min(1.0, eyeballItem.bloodiness + (impactVel * 0.035 * bleedMultiplier));
+                        
+                        const hitPoint = new THREE.Vector3(
+                            contact.bi.position.x + contact.ri.x,
+                            contact.bi.position.y + contact.ri.y,
+                            contact.bi.position.z + contact.ri.z
+                        );
+
+                        const collNormal = new THREE.Vector3(
+                            contact.ni.x,
+                            contact.ni.y,
+                            contact.ni.z
+                        );
+
+                        const isWallImpact = (contact.bi.mass === 0 || contact.bj.mass === 0);
+                        if (isWallImpact) {
+                            if (contact.bi.mass !== 0) {
+                                collNormal.negate();
+                            }
+
+                            const splatScale = (0.2 + Math.random() * 0.4) * (impactVel / 11.0);
+                            spawnSplatter(hitPoint, collNormal, Math.min(1.1, Math.max(0.2, splatScale)));
+                            triggerBloodBurst(hitPoint, Math.min(8, Math.floor(impactVel * 0.6)));
+                            adjustBloodVolume(impactVel * 0.003 * bleedMultiplier);
+                        }
+                    }
+                });
+
+                world.addBody(body);
+                const eyeballItem = { 
+                    mesh, 
+                    body,
+                    breed: breedIndex,
+                    baseRotationOffset: new THREE.Euler(0, -Math.PI/2, 0),
+                    bloodiness: 0.0,
+                    baseColor: new THREE.Color(0xffffff),
+                    targetEmissive: (breedIndex === 2) ? new THREE.Color(0x156000) : ((breedIndex === 3) ? new THREE.Color(0x350005) : new THREE.Color(0x000000))
+                };
+                eyeballs.push(eyeballItem);
+            }
+        }
+
+        function adjustBloodVolume(amount) {
+            bloodLevel = Math.min(bloodMaxY, bloodLevel + amount);
+            
+            const range = bloodMaxY - (-5.9);
+            const progress = ((bloodLevel - (-5.9)) / range); // 0.0 to 1.0
+
+            if (floorBounceLight) {
+                floorBounceLight.position.y = bloodLevel + 0.5;
+                floorBounceLight.intensity = 0.5 + progress * 5.5; 
+                floorBounceLight.distance = 12.0 + progress * 10.0;
+            }
+
+            if (bloodPoolMesh && bloodPoolMesh.material) {
+                bloodPoolMesh.material.emissiveIntensity = 0.1 + (progress * 1.7);
+            }
+        }
+
+        function setupInteractions() {
+            window.addEventListener('mousemove', (e) => {
+                targetMouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+                targetMouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+            });
+
+            window.addEventListener('touchmove', (e) => {
+                if (e.touches.length > 0) {
+                    targetMouse.x = (e.touches[0].clientX / window.innerWidth) * 2 - 1;
+                    targetMouse.y = -(e.touches[0].clientY / window.innerHeight) * 2 + 1;
+                }
+            }, { passive: true });
+
+            const handleStart = (clientX, clientY) => {
+                mouse.x = (clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(clientY / window.innerHeight) * 2 + 1;
+
+                raycaster.setFromCamera(mouse, camera);
+                const meshes = eyeballs.map(b => b.mesh);
+                const intersects = raycaster.intersectObjects(meshes);
+
+                if (intersects.length > 0) {
+                    const hitMesh = intersects[0].object;
+                    const hitBall = eyeballs.find(b => b.mesh === hitMesh);
+
+                    if (hitBall) {
+                        currentlyDraggedBody = hitBall.body;
+                        currentlyDraggedBody.wakeUp();
+
+                        triggerBloodBurst(intersects[0].point, 8);
+                        hitBall.bloodiness = Math.min(1.0, hitBall.bloodiness + 0.15 * bleedMultiplier);
+
+                        const hitPoint = intersects[0].point;
+                        const localHitPoint = new CANNON.Vec3(0, 0, 0);
+
+                        planeNormal.copy(camera.position).normalize();
+                        dragPlane.setFromNormalAndCoplanarPoint(planeNormal, hitPoint);
+
+                        const limitX = CONFIG.roomWidth / 2 - CONFIG.ballRadius;
+                        const limitY = CONFIG.roomHeight / 2 - CONFIG.ballRadius;
+                        const limitZ = CONFIG.roomDepth / 2 - CONFIG.ballRadius;
+
+                        const clampedHitPoint = hitPoint.clone();
+                        clampedHitPoint.x = Math.max(-limitX, Math.min(limitX, clampedHitPoint.x));
+                        clampedHitPoint.y = Math.max(-limitY, Math.min(limitY, clampedHitPoint.y));
+                        clampedHitPoint.z = Math.max(-limitZ, Math.min(limitZ, clampedHitPoint.z));
+
+                        dummyBody.position.copy(clampedHitPoint);
+                        dragJoint = new CANNON.PointToPointConstraint(
+                            currentlyDraggedBody,
+                            localHitPoint,
+                            dummyBody,
+                            new CANNON.Vec3(0, 0, 0)
+                        );
+                        world.addConstraint(dragJoint);
+                    }
+                }
+            };
+
+            window.addEventListener('mousedown', (e) => {
+                handleStart(e.clientX, e.clientY);
+            });
+
+            window.addEventListener('touchstart', (e) => {
+                if (e.touches.length > 0) {
+                    handleStart(e.touches[0].clientX, e.touches[0].clientY);
+                }
+            }, { passive: true });
+
+            const handleMove = (clientX, clientY) => {
+                if (!dragJoint) return;
+
+                mouse.x = (clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(clientY / window.innerHeight) * 2 + 1;
+
+                raycaster.setFromCamera(mouse, camera);
+                
+                if (raycaster.ray.intersectPlane(dragPlane, intersectionPoint)) {
+                    const limitX = CONFIG.roomWidth / 2 - CONFIG.ballRadius;
+                    const limitY = CONFIG.roomHeight / 2 - CONFIG.ballRadius;
+                    const limitZ = CONFIG.roomDepth / 2 - CONFIG.ballRadius;
+
+                    intersectionPoint.x = Math.max(-limitX, Math.min(limitX, intersectionPoint.x));
+                    intersectionPoint.y = Math.max(-limitY, Math.min(limitY, intersectionPoint.y));
+                    intersectionPoint.z = Math.max(-limitZ, Math.min(limitZ, intersectionPoint.z));
+
+                    dummyBody.position.copy(intersectionPoint);
+                    currentlyDraggedBody.wakeUp();
+                }
+            };
+
+            window.addEventListener('mousemove', (e) => handleMove(e.clientX, e.clientY));
+            window.addEventListener('touchmove', (e) => {
+                if (e.touches.length > 0) {
+                    handleMove(e.touches[0].clientX, e.touches[0].clientY);
+                }
+            }, { passive: true });
+
+            const handleEnd = () => {
+                if (dragJoint) {
+                    world.removeConstraint(dragJoint);
+                    dragJoint = null;
+                    currentlyDraggedBody = null;
+                }
+            };
+
+            window.addEventListener('mouseup', handleEnd);
+            window.addEventListener('touchend', handleEnd);
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            document.getElementById('btn-clean').addEventListener('click', () => {
+                splatters.forEach(s => {
+                    scene.remove(s.mesh);
+                    s.mesh.geometry.dispose();
+                    s.mesh.material.dispose();
+                });
+                splatters = [];
+
+                eyeballs.forEach(e => {
+                    e.bloodiness = 0;
+                });
+
+                bloodLevel = -5.9;
+                activeRipples = [];
+                if (floorBounceLight) {
+                    floorBounceLight.position.y = bloodLevel + 0.5;
+                }
+                if (bloodPoolMesh && bloodPoolMesh.material) {
+                    bloodPoolMesh.material.emissiveIntensity = 0.1;
+                }
+                adjustBloodVolume(0);
+            });
+
+            document.getElementById('btn-shake').addEventListener('click', () => {
+                eyeballs.forEach(ball => {
+                    ball.body.wakeUp();
+                    const impulseForce = new CANNON.Vec3(
+                        (Math.random() - 0.5) * 60,
+                        Math.random() * 45 + 15,
+                        (Math.random() - 0.5) * 60
+                    );
+                    ball.body.applyImpulse(impulseForce, ball.body.position);
+                    
+                    if (Math.random() < 0.6) {
+                        triggerBloodBurst(ball.mesh.position, 5);
+                    }
+                });
+            });
+        }
+
+        const fixedTimeStep = 1 / 60;
+        let lastTime = 0;
+
+        function animate(timestamp) {
+            requestAnimationFrame(animate);
+
+            if (bloodPoolMesh && bloodPoolMesh.material && bloodPoolMesh.material.userData && bloodPoolMesh.material.userData.time) {
+                bloodPoolMesh.material.userData.time.value = timestamp ? timestamp * 0.001 : 0;
+            }
+
+            mouse.x += (targetMouse.x - mouse.x) * 0.05;
+            mouse.y += (targetMouse.y - mouse.y) * 0.05;
+
+            const timeSec = timestamp ? timestamp * 0.001 : 0;
+            const breatheX = Math.sin(timeSec * 0.65) * 0.12;
+            const breatheY = Math.cos(timeSec * 0.5) * 0.08;
+            const breatheZ = Math.sin(timeSec * 0.3) * 0.06;
+
+            camera.position.x = mouse.x * 1.8 + breatheX;
+            camera.position.y = mouse.y * 1.8 + breatheY;
+            camera.position.z = 15.0 + breatheZ;
+            camera.lookAt(0, -1, 0);
+
+            let ceilingBaseStrength = 1.95;
+            let tubeColorHex = 0xe0f3ff;
+
+            let microOscillation = Math.sin(timeSec * 115.0) * 0.15 + Math.sin(timeSec * 67.3) * 0.1;
+            
+            let voltageWave = Math.sin(timeSec * 0.95) * Math.sin(timeSec * 2.7);
+            let dropMultiplier = 1.0;
+            if (voltageWave > 0.5) {
+                dropMultiplier = 0.28 + Math.random() * 0.35; 
+            }
+
+            if (Math.random() < 0.015) {
+                dropMultiplier = 0.02 + Math.random() * 0.15; 
+            }
+
+            let finalCeilingIntensity = (ceilingBaseStrength + microOscillation) * dropMultiplier;
+
+            if (finalCeilingIntensity < 0.45) {
+                tubeColorHex = 0x222233; 
+            } else {
+                tubeColorHex = 0xe0f3ff; 
+            }
+
+            mainCeilingLight.intensity = finalCeilingIntensity;
+            lightTubeMesh.material.color.setHex(tubeColorHex);
+
+            if (neonLight && neonTubeMesh && timestamp) {
+                const vibSpeed = timestamp * 0.07;
+                const dx = Math.sin(vibSpeed) * 0.006;
+                const dy = Math.cos(vibSpeed * 1.4) * 0.006;
+
+                neonTubeMesh.position.set(dx, 3.2 + dy, -5.35);
+                neonLight.position.set(dx, 3.2 + dy, -5.25);
+
+                let baseNeon = 3.2;
+                let breath = Math.sin(timeSec * 1.8) * 0.35 
+                           + Math.sin(timeSec * 8.3) * 0.18 
+                           + Math.sin(timeSec * 29.5) * 0.12;
+                
+                let gasSpit = 1.0;
+                if (Math.sin(timeSec * 1.1) * Math.cos(timeSec * 5.7) > 0.58) {
+                    gasSpit = 0.3 + Math.random() * 0.65;
+                }
+                if (Math.random() < 0.008) {
+                    gasSpit = 0.08;
+                }
+
+                neonLight.intensity = (baseNeon + breath) * gasSpit;
+                if (neonTubeMesh.material) {
+                    neonTubeMesh.material.emissiveIntensity = (5.0 + breath * 1.6) * gasSpit;
+                }
+            }
+
+            if (timestamp) {
+                const dt = (timestamp - lastTime) / 1000;
+                lastTime = timestamp;
+                world.step(fixedTimeStep, Math.min(dt, 0.1), 3);
+            } else {
+                world.step(fixedTimeStep);
+            }
+
+            if (currentlyDraggedBody) {
+                currentlyDraggedBody.angularVelocity.set(0, 0, 0);
+            }
+
+            activeRipples.forEach(r => {
+                r.time += 1/60;
+            });
+            activeRipples = activeRipples.filter(r => r.time < r.maxLife);
+
+            if (bloodPoolMesh) {
+                bloodPoolMesh.position.y = bloodLevel;
+                const posAttr = bloodPoolMesh.geometry.attributes.position;
+                const elapsed = timestamp ? timestamp * 0.0025 : 0;
+                
+                if (activeRipples.length > 12) {
+                    activeRipples.splice(0, activeRipples.length - 12);
+                }
+                const ripples = activeRipples;
+                const numRipples = ripples.length;
+
+                for (let i = 0; i < posAttr.count; i++) {
+                    const vx = posAttr.getX(i);
+                    const vz = posAttr.getZ(i);
+                    
+                    let vy = Math.sin(vx * 0.4 + elapsed) * 0.08 + Math.cos(vz * 0.35 + elapsed * 1.1) * 0.07;
+                    
+                    for (let rIdx = 0; rIdx < numRipples; rIdx++) {
+                        const r = ripples[rIdx];
+                        const dx = vx - r.x;
+                        const dz = vz - r.z;
+                        const dist = Math.sqrt(dx * dx + dz * dz);
+                        const speed = 4.2; 
+                        const waveFront = r.time * speed;
+                        const distDiff = Math.abs(dist - waveFront);
+                        
+                        if (dist < waveFront && distDiff < 2.0) {
+                            const amp = r.strength * Math.exp(-dist * 0.35) * Math.exp(-r.time * 1.8);
+                            const blend = Math.cos((distDiff / 2.0) * Math.PI * 0.5);
+                            vy += Math.sin((dist - waveFront) * 8.5) * amp * blend;
+                        }
+                    }
+
+                    posAttr.setY(i, vy);
+                }
+                posAttr.needsUpdate = true;
+                bloodPoolMesh.geometry.computeVertexNormals();
+            }
+
+            if (isCeilingDelugeActive && Math.random() < 0.6) {
+                for (let i = 0; i < 4; i++) {
+                    const startPos = new THREE.Vector3(
+                        (Math.random() - 0.5) * CONFIG.roomWidth,
+                        (CONFIG.roomHeight / 2) - 0.5,
+                        (Math.random() - 0.5) * CONFIG.roomDepth
+                    );
+                    const gravityY = -5.0 - Math.random() * 10;
+                    spawnBloodDrop(startPos, new THREE.Vector3(0, gravityY, 0));
+                }
+                adjustBloodVolume(0.0018); 
+            }
+
+            for (let i = bloodDrops.length - 1; i >= 0; i--) {
+                const drop = bloodDrops[i];
+                drop.velocity.y -= 0.18;
+                drop.mesh.position.addScaledVector(drop.velocity, 1/60);
+
+                const dropY = drop.mesh.position.y;
+                
+                if (dropY <= bloodLevel || dropY < -CONFIG.roomHeight / 2) {
+                    if (dropY <= bloodLevel) {
+                        addRipple(drop.mesh.position.x, drop.mesh.position.z, 0.08);
+                    }
+
+                    scene.remove(drop.mesh);
+                    drop.mesh.geometry.dispose();
+                    drop.mesh.material.dispose();
+                    bloodDrops.splice(i, 1);
+                    
+                    if (Math.random() < 0.05 && bloodLevel < bloodMaxY) {
+                        adjustBloodVolume(0.0001);
+                    }
+                }
+            }
+
+            const nowTime = Date.now();
+            splatters.forEach(s => {
+                if (s.dripVelocity > 0 && s.mesh.position.y > bloodLevel) {
+                    const prevY = s.mesh.position.y;
+                    s.mesh.position.y -= s.dripVelocity;
+                    s.mesh.scale.y = Math.min(1.6, s.mesh.scale.y + 0.0004);
+
+                    s.dripDistanceAccumulator = (s.dripDistanceAccumulator || 0) + (prevY - s.mesh.position.y);
+                    if (s.dripDistanceAccumulator > 0.12) {
+                        s.dripDistanceAccumulator = 0;
+                        const trailSize = s.size * 0.35 * (s.mesh.scale.x);
+                        spawnTrailDroplet(s.mesh.position, s.normal, trailSize, s.mesh.material.opacity * 0.75);
+                    }
+                }
+
+                const age = nowTime - s.creationTime;
+                const decayProgress = Math.min(1.0, age / 25000); 
+                s.mesh.material.opacity = 0.9 - (decayProgress * 0.4); 
+
+                const targetTint = new THREE.Color(0x2b1c1c); 
+                s.mesh.material.color.lerp(targetTint, 0.003); 
+            });
+
+            const screenGazeTarget = new THREE.Vector3(mouse.x * 6, mouse.y * 6, 4);
+
+            eyeballs.forEach(eyeball => {
+                eyeball.mesh.position.copy(eyeball.body.position);
+                
+                const ballY = eyeball.body.position.y;
+                const submersionDepth = bloodLevel - (ballY - CONFIG.ballRadius);
+                const isSubmerged = submersionDepth > 0;
+                
+                const prevSubmerged = eyeball.isSubmerged || false;
+                eyeball.isSubmerged = isSubmerged;
+
+                if (isSubmerged && !prevSubmerged) {
+                    const entryVel = Math.abs(eyeball.body.velocity.y);
+                    if (entryVel > 0.4) {
+                        addRipple(eyeball.body.position.x, eyeball.body.position.z, Math.min(1.3, entryVel * 0.16));
+                        triggerBloodBurst(new THREE.Vector3(eyeball.body.position.x, bloodLevel + 0.15, eyeball.body.position.z), Math.min(7, Math.floor(entryVel * 1.4)));
+                    }
+                }
+                
+                if (isSubmerged) {
+                    const buoyantForce = submersionDepth * 40; 
+                    eyeball.body.force.y += buoyantForce;
+                    
+                    eyeball.body.velocity.x *= 0.88;
+                    eyeball.body.velocity.y *= 0.86;
+                    eyeball.body.velocity.z *= 0.88;
+                    eyeball.body.angularVelocity.scale(0.85, eyeball.body.angularVelocity);
+
+                    eyeball.bloodiness = Math.min(1.0, eyeball.bloodiness + 0.008);
+                }
+
+                if (eyeball.bloodiness > 0.01) {
+                    const dirtyColor = new THREE.Color(0xffffff).lerp(new THREE.Color(0x3d0101), eyeball.bloodiness);
+                    eyeball.mesh.material.color.copy(dirtyColor);
+
+                    if (eyeball.breed === 2 || eyeball.breed === 3) {
+                        const darkEmissive = eyeball.targetEmissive.clone().lerp(new THREE.Color(0x220000), eyeball.bloodiness);
+                        eyeball.mesh.material.emissive.copy(darkEmissive);
+                    }
+                }
+
+                if (eyeball.body !== currentlyDraggedBody && eyeball.body.velocity.length() > 2.5) {
+                    eyeball.mesh.quaternion.copy(eyeball.body.quaternion);
+                } else {
+                    const lookRotation = new THREE.Matrix4();
+                    lookRotation.lookAt(screenGazeTarget, eyeball.mesh.position, camera.up);
+                    
+                    const targetQuaternion = new THREE.Quaternion().setFromRotationMatrix(lookRotation);
+                    const correction = new THREE.Quaternion().setFromEuler(eyeball.baseRotationOffset);
+                    targetQuaternion.multiply(correction);
+
+                    eyeball.mesh.quaternion.slerp(targetQuaternion, 0.08);
+                    
+                    eyeball.body.quaternion.copy(eyeball.mesh.quaternion);
+                }
+            });
+
+            if (dragJoint && currentlyDraggedBody) {
+                const dragY = dummyBody.position.y;
+                const prevDragSub = currentlyDraggedBody.dragSubmerged || false;
+                const dragSub = dragY < bloodLevel;
+                currentlyDraggedBody.dragSubmerged = dragSub;
+                if (dragSub !== prevDragSub) {
+                    addRipple(dummyBody.position.x, dummyBody.position.z, 0.45);
+                    triggerBloodBurst(new THREE.Vector3(dummyBody.position.x, bloodLevel + 0.1, dummyBody.position.z), 5);
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
