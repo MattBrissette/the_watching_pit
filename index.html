@@ -30,7 +30,7 @@
         }
         /* Horror panel theme styling */
         .horror-panel {
-            background: rgba(10, 10, 14, 0.92);
+            background: rgba(10, 10, 14, 0.95);
             backdrop-filter: blur(8px);
             border: 1px solid rgba(139, 0, 0, 0.4);
             box-shadow: 0 0 25px rgba(0, 0, 0, 0.95), inset 0 0 15px rgba(139, 0, 0, 0.25);
@@ -75,13 +75,41 @@
     <div class="crt-overlay"></div>
     <div class="vignette-overlay"></div>
 
+    <!-- Specimen Selection Interface -->
+    <div id="ui-selection" class="absolute inset-0 z-40 flex flex-col justify-between items-center p-6 md:p-12 select-none transition-all duration-1000 opacity-0 pointer-events-none">
+        <!-- Header -->
+        <div class="text-center mt-4">
+            <h2 class="text-3xl md:text-5xl font-bold tracking-widest text-red-600 horror-text-glow creepster-title mb-2">
+                CHOOSE THE SPECIMEN
+            </h2>
+            <p class="text-[10px] md:text-xs text-zinc-400 tracking-widest font-mono">
+                SELECT AN EYE BREED DIRECTLY IN THE PIT CONTAINER TO INJECT IT
+            </p>
+        </div>
+
+        <!-- Dynamic Projected Specimen Information Panel (floats beneath hovered eyeball) -->
+        <div id="specimen-details" class="horror-panel absolute max-w-xs md:max-w-sm w-72 md:w-80 px-4 py-3 rounded-xl border border-red-900/40 text-center transition-all duration-300 -translate-x-1/2 opacity-0 pointer-events-none z-50">
+            <h3 id="specimen-name" class="text-lg md:text-xl font-bold tracking-wider text-red-500 creepster-title uppercase">VILE STRAIN</h3>
+            <p id="specimen-desc" class="text-[10px] md:text-xs text-zinc-400 mt-2 font-mono leading-relaxed">
+                Loading database details...
+            </p>
+        </div>
+        
+        <!-- Placeholder space replacing old selection buttons -->
+        <div></div>
+    </div>
+
     <!-- Top Left Corner: Clean Branding (Fades in post-intro) -->
     <div id="ui-title" class="absolute top-6 left-6 z-30 pointer-events-none opacity-0 transition-opacity duration-1000">
         <h1 class="text-2xl font-bold tracking-widest text-red-600 horror-text-glow creepster-title select-none">THE WATCHING PIT</h1>
     </div>
 
-    <!-- Top Right Corner: Wash, Agitate Buttons (Fades in post-intro) -->
+    <!-- Top Right Corner: Wash, Agitate & Audio Buttons (Fades in post-intro) -->
     <div id="ui-controls" class="absolute top-6 right-6 z-30 flex gap-2 items-center opacity-0 transition-opacity duration-1000 pointer-events-none">
+        <button id="btn-audio" class="horror-panel bg-zinc-950/40 hover:bg-zinc-900/60 text-red-400 font-semibold py-2 px-3 rounded-xl border border-zinc-800 hover:border-zinc-700 transition duration-200 text-xs active:scale-95 shadow-xl cursor-pointer" title="Toggle Horror Audio Engine">
+            <svg id="svg-audio-off" class="w-4 h-4 fill-current hidden" viewBox="0 0 24 24"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM12 4L9.91 6.09 12 8.18V4zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.03c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 19l-3-3H5v-4h3l3.27-3.27L12 9.45v9.55z"/></svg>
+            <svg id="svg-audio-on" class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+        </button>
         <button id="btn-clean" class="horror-panel bg-zinc-950/40 hover:bg-zinc-900/60 text-zinc-300 font-semibold py-2 px-5 rounded-xl border border-zinc-800 hover:border-zinc-700 transition duration-200 text-xs active:scale-95 shadow-xl cursor-pointer">
             Wash
         </button>
@@ -139,6 +167,26 @@
         let targetMouse = new THREE.Vector2();
         let raycaster = new THREE.Raycaster();
 
+        // Game State Engine
+        let gameState = 'LOADING'; // 'LOADING', 'SELECT', 'TRANSITION_ZOOM', 'INTRO', 'PLAY'
+
+        // Selection Phase variables
+        let selectionGroup;
+        let selectionEyes = [];
+        let selectionLights = [];
+        let selectedBreed = 3; // default red
+        let hoveredBreedIndex = -1;
+        let transitionTimer = 0;
+        let zoomStartCamPos = new THREE.Vector3();
+        let zoomTargetCamPos = new THREE.Vector3();
+
+        const breedsInfo = [
+            { name: "TEAL SIREN", desc: "Drawn from deep aquatic rifts. Emits a freezing oceanic gaze. Features a bioluminescent iris structure with cold light projection capabilities.", color: "#06b6d4" },
+            { name: "FERAL SERPENT", desc: "Nocturnal ambush predator. Features a dynamic vertical slit pupil, reptilian scale pigmentation, and hyper-dilated visual tracking.", color: "#f59e0b" },
+            { name: "TOXIC MUTANT", desc: "Fleshy matter corrupted by bio-chemical contamination. Dripping in radioactive elements with intense, self-illuminating glowing emissions.", color: "#10b981" },
+            { name: "VILE STRAIN", desc: "The original horror specimen. Hyper-bloodshot human sclera displaying advanced cellular decay, high aggression, and visceral vascular details.", color: "#ef4444" }
+        ];
+
         // Physics variables
         let wallPhysicsMat, ballPhysicsMat;
         let dragJoint = null;
@@ -158,16 +206,228 @@
         let dripTrailTexture;
 
         // Lighting & meshes
-        let mainCeilingLight, ambientLight, neonLight, floorBounceLight, coldFillLight;
+        let mainCeilingLight, ambientLight, floorBounceLight, coldFillLight;
         let lightTubeMesh, neonTubeMesh, neonBracket, neonCageGroup, ceilingFlange;
 
         // Intro Cinematic variables
-        let introActive = true;
         let introProgress = 0;
         let transitionProgress = 0;
         let tubeSpline, tubeMesh, introEyeballMesh, introLight, tubeLightMat, fixtureGroup;
 
-        // Mathematical easing helper
+        // === Horror Audio Engine ===
+        let audioCtx = null;
+        let ambientDrone = null;
+        let noiseFilter = null;
+        let isMuted = false;
+        let lastImpactTime = 0;
+
+        function initAudio() {
+            if (audioCtx) return;
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContext();
+                
+                const osc1 = audioCtx.createOscillator();
+                const osc2 = audioCtx.createOscillator();
+                const droneGain = audioCtx.createGain();
+                
+                osc1.type = 'sawtooth';
+                osc1.frequency.setValueAtTime(55, audioCtx.currentTime); // Low A1
+                
+                osc2.type = 'square';
+                osc2.frequency.setValueAtTime(55.7, audioCtx.currentTime); // Dissonant beating
+                
+                const filter = audioCtx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(95, audioCtx.currentTime);
+                filter.Q.setValueAtTime(4, audioCtx.currentTime);
+                
+                const lfo = audioCtx.createOscillator();
+                const lfoGain = audioCtx.createGain();
+                lfo.frequency.setValueAtTime(0.2, audioCtx.currentTime);
+                lfoGain.gain.setValueAtTime(25, audioCtx.currentTime);
+                lfo.connect(lfoGain);
+                lfoGain.connect(filter.frequency);
+                
+                osc1.connect(filter);
+                osc2.connect(filter);
+                
+                filter.connect(droneGain);
+                droneGain.connect(audioCtx.destination);
+                
+                // Volume of ambient drone reduced to a very subtle 0.05 backdrop hum
+                droneGain.gain.setValueAtTime(isMuted ? 0 : 0.05, audioCtx.currentTime);
+                
+                osc1.start();
+                osc2.start();
+                lfo.start();
+                
+                ambientDrone = { osc1, osc2, lfo, droneGain, filter };
+            } catch (e) {
+                console.warn("Web Audio API not supported or blocked.", e);
+            }
+        }
+
+        function playImpactSound(intensity) {
+            if (!audioCtx || isMuted) return;
+            const now = audioCtx.currentTime;
+            
+            // Impose a strict threshold to prevent sound stacking clicks
+            if (now - lastImpactTime < 0.04) return;
+            lastImpactTime = now;
+
+            try {
+                // Low meaty thump
+                const oscLow = audioCtx.createOscillator();
+                const gainLow = audioCtx.createGain();
+                oscLow.type = 'triangle';
+                oscLow.frequency.setValueAtTime(140 * intensity, now);
+                oscLow.frequency.exponentialRampToValueAtTime(35, now + 0.32);
+                
+                gainLow.gain.setValueAtTime(0.35 * intensity, now);
+                gainLow.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+                
+                // High wet splash snap
+                const bufferSize = audioCtx.sampleRate * 0.12; 
+                const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = Math.random() * 2 - 1;
+                }
+                const noiseNode = audioCtx.createBufferSource();
+                noiseNode.buffer = buffer;
+                
+                const bandpass = audioCtx.createBiquadFilter();
+                bandpass.type = 'bandpass';
+                bandpass.frequency.setValueAtTime(600 + (intensity * 500), now);
+                bandpass.Q.setValueAtTime(2.5, now);
+                
+                const gainHigh = audioCtx.createGain();
+                gainHigh.gain.setValueAtTime(0.18 * intensity, now);
+                gainHigh.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+
+                oscLow.connect(gainLow);
+                gainLow.connect(audioCtx.destination);
+                
+                noiseNode.connect(bandpass);
+                bandpass.connect(gainHigh);
+                gainHigh.connect(audioCtx.destination);
+                
+                oscLow.start(now);
+                oscLow.stop(now + 0.33);
+                noiseNode.start(now);
+                noiseNode.stop(now + 0.13);
+            } catch (err) {}
+        }
+
+        function playThrowSound() {
+            if (!audioCtx || isMuted) return;
+            try {
+                const now = audioCtx.currentTime;
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(75, now);
+                osc.frequency.exponentialRampToValueAtTime(280, now + 0.14); // Rising organic squish launch
+                
+                gain.gain.setValueAtTime(0.25, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+                
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(now + 0.15);
+            } catch(e) {}
+        }
+
+        function playCinematicTransitionSound() {
+            if (!audioCtx || isMuted) return;
+            try {
+                const now = audioCtx.currentTime;
+                const duration = 2.2; // Winding duration
+
+                // 1. Heavy suction rushing vacuum wind sound (swept noise)
+                const bufferSize = audioCtx.sampleRate * duration;
+                const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = Math.random() * 2 - 1;
+                }
+                const windNode = audioCtx.createBufferSource();
+                windNode.buffer = buffer;
+                
+                const windFilter = audioCtx.createBiquadFilter();
+                windFilter.type = 'bandpass';
+                windFilter.frequency.setValueAtTime(180, now);
+                windFilter.frequency.exponentialRampToValueAtTime(1400, now + duration);
+                windFilter.Q.setValueAtTime(1.8, now);
+                
+                const windGain = audioCtx.createGain();
+                windGain.gain.setValueAtTime(0.01, now);
+                windGain.gain.linearRampToValueAtTime(0.25, now + duration * 0.85);
+                windGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+                
+                windNode.connect(windFilter);
+                windFilter.connect(windGain);
+                windGain.connect(audioCtx.destination);
+
+                // 2. Ascending tension synth riser
+                const oscRiser = audioCtx.createOscillator();
+                oscRiser.type = 'sawtooth';
+                oscRiser.frequency.setValueAtTime(65, now);
+                oscRiser.frequency.exponentialRampToValueAtTime(450, now + duration);
+                
+                const riserFilter = audioCtx.createBiquadFilter();
+                riserFilter.type = 'lowpass';
+                riserFilter.frequency.setValueAtTime(110, now);
+                riserFilter.frequency.exponentialRampToValueAtTime(650, now + duration);
+                
+                const riserGain = audioCtx.createGain();
+                riserGain.gain.setValueAtTime(0.01, now);
+                riserGain.gain.linearRampToValueAtTime(0.15, now + duration * 0.9);
+                riserGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+                
+                oscRiser.connect(riserFilter);
+                riserFilter.connect(riserGain);
+                riserGain.connect(audioCtx.destination);
+                
+                windNode.start(now);
+                oscRiser.start(now);
+            } catch(e) {}
+        }
+
+        function playAmbientSizzle() {
+            if (!audioCtx || isMuted) return;
+            try {
+                const now = audioCtx.currentTime;
+                const bufferSize = audioCtx.sampleRate * 0.4;
+                const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+                const data = buffer.getChannelData(0);
+                
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = Math.random() * 2 - 1;
+                }
+                
+                const noise = audioCtx.createBufferSource();
+                noise.buffer = buffer;
+                
+                const filter = audioCtx.createBiquadFilter();
+                filter.type = 'bandpass';
+                filter.frequency.setValueAtTime(1400, now);
+                filter.Q.setValueAtTime(2.0, now);
+                
+                const gain = audioCtx.createGain();
+                gain.gain.setValueAtTime(0.06, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+                
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(audioCtx.destination);
+                
+                noise.start();
+            } catch (e) {}
+        }
+
         function smoothstep(min, max, value) {
             const x = Math.max(0, Math.min(1, (value - min) / (max - min)));
             return x * x * (3 - 2 * x);
@@ -340,7 +600,7 @@
             dripTrailTexture = new THREE.CanvasTexture(canvas);
         }
 
-        // === GLOBAL SPATTER, BURST, DROP, AND RIPPLE FUNCTIONS ===
+        // Re-added the missing blood splatter spawning helper
         function spawnSplatter(position, normal, size) {
             const texIdx = Math.floor(Math.random() * splatTextures.length);
             const splatGeo = new THREE.CircleGeometry(size, 16);
@@ -380,6 +640,7 @@
             }
         }
 
+        // Re-added the missing trail droplet spawning helper
         function spawnTrailDroplet(position, normal, size, opacity, tintColor) {
             const splatGeo = new THREE.PlaneGeometry(size, size * 2.2);
             const splatMat = new THREE.MeshStandardMaterial({
@@ -410,6 +671,7 @@
             });
         }
 
+        // Re-added the missing ripple adder helper
         function addRipple(x, z, strength) {
             activeRipples.push({
                 x: x,
@@ -420,6 +682,7 @@
             });
         }
 
+        // Re-added the missing blood drop spawning helper
         function spawnBloodDrop(position, velocity = null) {
             const size = 0.04 + Math.random() * 0.06;
             const dropGeo = new THREE.SphereGeometry(size, 8, 8);
@@ -448,6 +711,7 @@
             });
         }
 
+        // Re-added the missing heavy blood drop spawning helper
         function spawnHeavyBloodDrop(position) {
             const size = 0.14 + Math.random() * 0.10;
             const dropGeo = new THREE.SphereGeometry(size, 10, 10);
@@ -475,6 +739,7 @@
         }
 
         function triggerBloodBurst(position, count = 6) {
+            playImpactSound(Math.min(1.0, count / 8));
             for (let i = 0; i < count; i++) {
                 const vel = new THREE.Vector3(
                     (Math.random() - 0.5) * 6,
@@ -499,7 +764,7 @@
                 const y = Math.random() * 1024;
                 const size = Math.random() * 2 + 1;
                 const colorVal = Math.floor(Math.random() * 20);
-                ctx.fillStyle = `rgba(${colorVal}, ${colorVal + 5}, ${colorVal + 10}, 0.25)`;
+                ctx.fillStyle = `rgba(${colorVal}, ${colorVal + 5}, ${colorVal + 8}, 0.25)`;
                 ctx.fillRect(x, y, size, size);
             }
 
@@ -573,7 +838,6 @@
                 c.restore();
             }
 
-            // Bloody palm print
             function drawPalmPrint(c, x, y, r, angle) {
                 c.save();
                 c.translate(x, y);
@@ -664,7 +928,6 @@
             return texture;
         }
 
-        // Procedural organic red-black veined concrete overlay texture for the tube
         function createTubeConcreteTexture() {
             const canvas = document.createElement('canvas');
             canvas.width = 512;
@@ -686,7 +949,9 @@
             ctx.fillStyle = 'rgba(10, 10, 14, 0.45)';
             for (let i = 0; i < 20; i++) {
                 ctx.beginPath();
-                ctx.arc(Math.random() * 512, Math.random() * 512, Math.random() * 70 + 20, 0, Math.PI * 2);
+                let x = Math.random() * 512;
+                let y = Math.random() * 512;
+                ctx.arc(x, y, Math.random() * 70 + 20, 0, Math.PI * 2);
                 ctx.fill();
             }
 
@@ -887,7 +1152,6 @@
             return texture;
         }
 
-        // Procedural organic red-black veined concrete overlay texture for walls
         function createVeinConcreteTexture() {
             const canvas = document.createElement('canvas');
             canvas.width = 512;
@@ -937,7 +1201,7 @@
             scene.fog = new THREE.FogExp2(0x020204, 0.055);
 
             camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
-            camera.position.set(0, 0, 15);
+            camera.position.set(0, 0.2, 13); 
 
             renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -1075,7 +1339,6 @@
             frontBody.position.set(0, 0, hd + wallThickness / 2);
             world.addBody(frontBody);
 
-            // Exit Flange - permanent rusty metal collar where eyeball exits the tube
             const flangeGeo = new THREE.CylinderGeometry(0.82, 0.92, 0.45, 24);
             const flangeMat = new THREE.MeshStandardMaterial({ 
                 color: 0x1f1a1c, 
@@ -1319,8 +1582,112 @@
             }
         }
 
+        function initSelectionScene() {
+            selectionGroup = new THREE.Group();
+            scene.add(selectionGroup);
+
+            const sphereGeo = new THREE.SphereGeometry(0.45, 32, 32);
+
+            const colors = [];
+            const posAttr = sphereGeo.attributes.position;
+            for (let i = 0; i < posAttr.count; i++) {
+                const ny = posAttr.getY(i) / 0.45;
+                const shade = THREE.MathUtils.lerp(0.12, 1.0, smoothstep(-0.6, 0.4, ny));
+                colors.push(shade, shade, shade);
+            }
+            sphereGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+            const positionsX = [-2.1, -0.7, 0.7, 2.1];
+
+            const selectionKeyLight = new THREE.DirectionalLight(0xfff3e0, 0.85);
+            selectionKeyLight.position.set(1.0, 3.0, 11.0); 
+            selectionGroup.add(selectionKeyLight);
+            selectionLights.push(selectionKeyLight);
+
+            const selectionWarmFill = new THREE.AmbientLight(0x1a0d0d, 0.3);
+            selectionGroup.add(selectionWarmFill);
+            selectionLights.push(selectionWarmFill);
+
+            for (let i = 0; i < 4; i++) {
+                const tex = createEyeballTexture(i, i === 2 ? 3 : (i === 3 ? 1 : 0));
+                
+                const mat = new THREE.MeshPhysicalMaterial({
+                    map: tex,
+                    roughness: 0.50, 
+                    metalness: 0.05,
+                    clearcoat: 0.12,
+                    clearcoatRoughness: 0.65, 
+                    reflectivity: 0.15,
+                    envMapIntensity: 0.05, 
+                    ior: 1.35,
+                    vertexColors: true
+                });
+
+                if (i === 2) {
+                    mat.emissive = new THREE.Color(0x0a3000);
+                    mat.emissiveIntensity = 0.25;
+                } else if (i === 3) {
+                    mat.emissive = new THREE.Color(0x1a0002);
+                    mat.emissiveIntensity = 0.20;
+                }
+
+                const mesh = new THREE.Mesh(sphereGeo, mat);
+                mesh.position.set(positionsX[i], 0.2, 8.8);
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                selectionGroup.add(mesh);
+
+                const lightColor = i === 0 ? 0x0066aa : (i === 1 ? 0xaa6600 : (i === 2 ? 0x00aa33 : 0xaa2222));
+                const rimLight = new THREE.PointLight(lightColor, 1.25, 4.5);
+                rimLight.position.set(positionsX[i], -0.2, 7.6); 
+                selectionGroup.add(rimLight);
+                selectionLights.push(rimLight);
+
+                selectionEyes.push({
+                    mesh: mesh,
+                    breed: i,
+                    baseRotationOffset: new THREE.Euler(0, -Math.PI / 2, 0),
+                    scale: new THREE.Vector3(1, 1, 1),
+                    originalY: 0.2
+                });
+            }
+        }
+
+        function setHoveredBreed(index) {
+            hoveredBreedIndex = index;
+            const detailsPanel = document.getElementById('specimen-details');
+            const nameLabel = document.getElementById('specimen-name');
+            const descLabel = document.getElementById('specimen-desc');
+
+            if (index !== -1) {
+                const info = breedsInfo[index];
+                nameLabel.textContent = info.name;
+                descLabel.textContent = info.desc;
+                nameLabel.style.color = info.color;
+                
+                detailsPanel.style.borderColor = info.color + "77";
+                detailsPanel.style.boxShadow = `0 0 20px ${info.color}22`;
+            }
+        }
+
+        function selectBreedAndDive(breedIndex) {
+            initAudio(); 
+            playCinematicTransitionSound(); // Play pneumatic sweeping swoosh riser
+            selectedBreed = breedIndex;
+            gameState = 'TRANSITION_ZOOM';
+            transitionTimer = 0;
+
+            const selectUI = document.getElementById('ui-selection');
+            selectUI.classList.add('opacity-0', 'pointer-events-none');
+
+            const selectedEye = selectionEyes.find(e => e.breed === breedIndex);
+            zoomStartCamPos.copy(camera.position);
+            zoomTargetCamPos.copy(selectedEye.mesh.position).add(new THREE.Vector3(0, 0, 0.85));
+
+            triggerBloodBurst(selectedEye.mesh.position, 6);
+        }
+
         function createIntroPneumaticTube() {
-            // Winding 3D curve looping very tightly right in front of the lens
             tubeSpline = new THREE.CatmullRomCurve3([
                 new THREE.Vector3(-3.5, 4.2, 10.5),
                 new THREE.Vector3(1.2, 2.8, 9.2),
@@ -1332,19 +1699,17 @@
 
             const tubeGeo = new THREE.TubeGeometry(tubeSpline, 64, 0.72, 16, false);
             
-            // Solid concrete material matching the container's rough, dark texture (Opaque)
             const tubeMat = new THREE.MeshStandardMaterial({
                 map: createTubeConcreteTexture(),
                 roughness: 0.95,
                 metalness: 0.1,
-                side: THREE.DoubleSide, // Ensure the interior walls render perfectly since POV camera is inside!
+                side: THREE.DoubleSide, 
                 depthWrite: true
             });
 
             tubeMesh = new THREE.Mesh(tubeGeo, tubeMat);
             scene.add(tubeMesh);
 
-            // Structural rusty clamp rings wrapping around the concrete tube
             const ringGeo = new THREE.TorusGeometry(0.74, 0.09, 8, 24);
             const ringMat = new THREE.MeshStandardMaterial({ 
                 color: 0x1f1a1c, 
@@ -1364,7 +1729,8 @@
             }
 
             const introEyeballGeo = new THREE.SphereGeometry(CONFIG.ballRadius, 32, 32);
-            const introEyeballTex = createEyeballTexture(3, 4); 
+            const introEyeballTex = createEyeballTexture(selectedBreed, 4); 
+            
             const introEyeballMat = new THREE.MeshPhysicalMaterial({
                 map: introEyeballTex,
                 roughness: 0.01,
@@ -1376,10 +1742,17 @@
                 ior: 1.8
             });
 
+            if (selectedBreed === 2) {
+                introEyeballMat.emissive = new THREE.Color(0x156000);
+                introEyeballMat.emissiveIntensity = 0.55;
+            } else if (selectedBreed === 3) {
+                introEyeballMat.emissive = new THREE.Color(0x350005);
+                introEyeballMat.emissiveIntensity = 0.35;
+            }
+
             introEyeballMesh = new THREE.Mesh(introEyeballGeo, introEyeballMat);
             scene.add(introEyeballMesh);
 
-            // Double fluorescent overhead tube light fixture
             const fixtGeo = new THREE.BoxGeometry(2.5, 0.1, 0.4);
             const fixtMat = new THREE.MeshStandardMaterial({ color: 0x111115, roughness: 0.8 });
             const fixtMesh = new THREE.Mesh(fixtGeo, fixtMat);
@@ -1400,8 +1773,7 @@
             fixtureGroup.rotation.set(0.2, 0.4, -0.1);
             scene.add(fixtureGroup);
             
-            // Internal tracking point light that rides inside the opaque pipe to illuminate wet details (Screenshot Fix)
-            introLight = new THREE.PointLight(0xff3333, 0.0, 6.0); // Moody, blood-red glow highlighting concrete interior
+            introLight = new THREE.PointLight(0xff3333, 0.0, 6.0); 
             scene.add(introLight);
         }
 
@@ -1428,9 +1800,18 @@
                 (Math.random() - 0.5) * 12,
                 (Math.random() - 0.5) * 12
             );
+
+            const dynamicLeadTex = createEyeballTexture(selectedBreed, 0);
+            leadEyeball.mesh.material.map = dynamicLeadTex;
+            leadEyeball.breed = selectedBreed;
+            leadEyeball.targetEmissive = (selectedBreed === 2) ? new THREE.Color(0x156000) : ((selectedBreed === 3) ? new THREE.Color(0x350005) : new THREE.Color(0x000000));
+            leadEyeball.mesh.material.needsUpdate = true;
+
             leadEyeball.body.wakeUp();
 
             addRipple(0, 0, 1.1);
+            // Dynamic wet splashdown on transition completion
+            playImpactSound(1.2); 
             triggerBloodBurst(new THREE.Vector3(0, bloodLevel + 0.15, 0), 12);
             adjustBloodVolume(0.04); 
 
@@ -1438,7 +1819,7 @@
             const controls = document.getElementById('ui-controls');
             controls.classList.remove('opacity-0', 'pointer-events-none');
             
-            introActive = false;
+            gameState = 'PLAY';
         }
 
         function spawnEyeballs() {
@@ -1467,10 +1848,10 @@
             }
 
             for (let i = 0; i < CONFIG.ballCount; i++) {
-                const breedIndex = Math.floor(Math.random() * 4);
+                const breedIndex = (i === 0) ? selectedBreed : Math.floor(Math.random() * 4);
                 
                 let treatmentIndex = 0;
-                if (Math.random() < 0.20) {
+                if (Math.random() < 0.20 && i !== 0) {
                     treatmentIndex = 1 + Math.floor(Math.random() * 4);
                 }
                 
@@ -1532,36 +1913,42 @@
 
                     const impactVel = contact.getImpactVelocityAlongNormal();
                     
-                    if (impactVel > 3.5) {
-                        eyeballItem.bloodiness = Math.min(1.0, eyeballItem.bloodiness + (impactVel * 0.02 * bleedMultiplier));
-                        
-                        const hitPoint = new THREE.Vector3(
-                            contact.bi.position.x + contact.ri.x,
-                            contact.bi.position.y + contact.ri.y,
-                            contact.bi.position.z + contact.ri.z
-                        );
+                    // Lowered bounce sound threshold dramatically to 0.8 so all normal bounces inside container play sound!
+                    if (impactVel > 0.8) {
+                        const intensity = Math.min(1.0, impactVel * 0.18);
+                        playImpactSound(intensity);
 
-                        const collNormal = new THREE.Vector3(
-                            contact.ni.x,
-                            contact.ni.y,
-                            contact.ni.z
-                        );
-
-                        const isWallImpact = (contact.bi.mass === 0 || contact.bj.mass === 0);
-                        if (isWallImpact) {
-                            if (contact.bi.mass !== 0) {
-                                collNormal.negate();
-                            }
-
-                            if (impactVel > 5.0 && Math.random() < 0.25) {
-                                const splatScale = (0.2 + Math.random() * 0.3) * (impactVel / 12.0);
-                                spawnSplatter(hitPoint, collNormal, Math.min(0.8, Math.max(0.15, splatScale)));
-                            }
+                        if (impactVel > 3.5) {
+                            eyeballItem.bloodiness = Math.min(1.0, eyeballItem.bloodiness + (impactVel * 0.02 * bleedMultiplier));
                             
-                            if (Math.random() < 0.4) {
-                                triggerBloodBurst(hitPoint, Math.min(4, Math.floor(impactVel * 0.3)));
+                            const hitPoint = new THREE.Vector3(
+                                contact.bi.position.x + contact.ri.x,
+                                contact.bi.position.y + contact.ri.y,
+                                contact.bi.position.z + contact.ri.z
+                            );
+
+                            const collNormal = new THREE.Vector3(
+                                contact.ni.x,
+                                contact.ni.y,
+                                contact.ni.z
+                            );
+
+                            const isWallImpact = (contact.bi.mass === 0 || contact.bj.mass === 0);
+                            if (isWallImpact) {
+                                if (contact.bi.mass !== 0) {
+                                    collNormal.negate();
+                                }
+
+                                if (impactVel > 5.0 && Math.random() < 0.25) {
+                                    const splatScale = (0.2 + Math.random() * 0.3) * (impactVel / 12.0);
+                                    spawnSplatter(hitPoint, collNormal, Math.min(0.8, Math.max(0.15, splatScale)));
+                                }
+                                
+                                if (Math.random() < 0.4) {
+                                    triggerBloodBurst(hitPoint, Math.min(4, Math.floor(impactVel * 0.3)));
+                                }
+                                adjustBloodVolume(impactVel * 0.0015 * bleedMultiplier);
                             }
-                            adjustBloodVolume(impactVel * 0.0015 * bleedMultiplier);
                         }
                     }
                 });
@@ -1608,7 +1995,7 @@
             });
 
             const handleStart = (clientX, clientY, pointerId) => {
-                if (introActive) return; 
+                if (gameState !== 'PLAY') return; 
 
                 updateMousePosition(clientX, clientY);
                 mouse.copy(targetMouse);
@@ -1622,7 +2009,12 @@
                     const hitBall = eyeballs.find(b => b.mesh === hitMesh);
 
                     if (hitBall) {
-                        renderer.domElement.setPointerCapture(pointerId);
+                        // Safe sandbox Pointer Capture encapsulation
+                        try {
+                            renderer.domElement.setPointerCapture(pointerId);
+                        } catch (err) {
+                            console.warn("setPointerCapture bypassed due to IFrame sandbox focus limit:", err);
+                        }
 
                         currentlyDraggedBody = hitBall.body;
                         currentlyDraggedBody.wakeUp();
@@ -1662,7 +2054,21 @@
                 if (e.target.closest('button') || e.target.closest('.horror-panel')) {
                     return;
                 }
-                handleStart(e.clientX, e.clientY, e.pointerId);
+                if (gameState === 'SELECT') {
+                    updateMousePosition(e.clientX, e.clientY);
+                    mouse.copy(targetMouse);
+                    raycaster.setFromCamera(mouse, camera);
+                    const choiceMeshes = selectionEyes.map(se => se.mesh);
+                    const intersects = raycaster.intersectObjects(choiceMeshes);
+                    if (intersects.length > 0) {
+                        const hitEye = selectionEyes.find(se => se.mesh === intersects[0].object);
+                        if (hitEye) {
+                            selectBreedAndDive(hitEye.breed);
+                        }
+                    }
+                } else if (gameState === 'PLAY') {
+                    handleStart(e.clientX, e.clientY, e.pointerId);
+                }
             });
 
             let dragHistory = [];
@@ -1693,7 +2099,9 @@
             };
 
             window.addEventListener('pointermove', (e) => {
-                handleMove(e.clientX, e.clientY);
+                if (gameState === 'PLAY') {
+                    handleMove(e.clientX, e.clientY);
+                }
             });
 
             const handleEnd = (e) => {
@@ -1718,6 +2126,9 @@
                                 Math.max(-25, Math.min(25, vy)),
                                 Math.max(-25, Math.min(25, vz))
                             );
+                            
+                            // Emit throw swoosh sound
+                            playThrowSound();
                         }
                     }
                     dragHistory = [];
@@ -1796,6 +2207,7 @@
                     bloodPoolMesh.material.emissiveIntensity = 0.1;
                 }
                 adjustBloodVolume(0);
+                playAmbientSizzle();
             };
 
             window._agitateBoost = 0;
@@ -1810,8 +2222,8 @@
                 eyeballs.forEach(ball => {
                     ball.body.wakeUp();
                     const impulseForce = new CANNON.Vec3(
-                        (Math.random() - 0.5) * 6, // Gentle horizontal scatter
-                        Math.random() * 8 + 4,     // Gentle toss up (vY = 4 to 12)
+                        (Math.random() - 0.5) * 6, 
+                        Math.random() * 8 + 4,     
                         (Math.random() - 0.5) * 6
                     );
                     ball.body.applyImpulse(impulseForce, ball.body.position);
@@ -1830,6 +2242,29 @@
 
             btnShake.addEventListener('pointerdown', triggerShake);
             btnShake.addEventListener('click', triggerShake);
+
+            const btnAudio = document.getElementById('btn-audio');
+            const svgAudioOn = document.getElementById('svg-audio-on');
+            const svgAudioOff = document.getElementById('svg-audio-off');
+
+            btnAudio.addEventListener('click', () => {
+                isMuted = !isMuted;
+                if (isMuted) {
+                    svgAudioOn.classList.add('hidden');
+                    svgAudioOff.classList.remove('hidden');
+                    if (ambientDrone) {
+                        ambientDrone.droneGain.gain.setValueAtTime(0, audioCtx.currentTime);
+                    }
+                } else {
+                    svgAudioOn.classList.remove('hidden');
+                    svgAudioOff.classList.add('hidden');
+                    initAudio(); 
+                    if (ambientDrone) {
+                        // Matching the new subtle 0.05 default volume setting
+                        ambientDrone.droneGain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+                    }
+                }
+            });
         }
 
         const fixedTimeStep = 1 / 60;
@@ -1838,7 +2273,6 @@
         function animate(timestamp) {
             requestAnimationFrame(animate);
 
-            // Compute delta time to make the animation frame-rate independent
             let dt = 0.016;
             if (timestamp) {
                 if (lastTime === 0) lastTime = timestamp;
@@ -1848,16 +2282,103 @@
             }
             const fpsScale = dt * 60; 
 
-            // Initialize nowTime at the absolute top of animate to avoid Temporal Dead Zone errors
             const nowTime = Date.now();
             const timeSec = timestamp ? timestamp * 0.001 : 0;
 
-            // RESTORED: Continuous mouse hover coordinates smoothing for eyeball/camera tracking
             mouse.x += (targetMouse.x - mouse.x) * 0.05 * fpsScale;
             mouse.y += (targetMouse.y - mouse.y) * 0.05 * fpsScale;
 
-            if (introActive) {
-                // FLICKERING OVERHEAD BALLAST LOGIC (Only runs during intro sequence)
+            if (gameState === 'SELECT') {
+                camera.position.x = mouse.x * 0.8;
+                camera.position.y = 0.2 + mouse.y * 0.4;
+                camera.position.z = 13.0;
+                camera.lookAt(0, 0.2, 8.8);
+
+                raycaster.setFromCamera(targetMouse, camera);
+                const choiceMeshes = selectionEyes.map(se => se.mesh);
+                const intersects = raycaster.intersectObjects(choiceMeshes);
+
+                let castBreed = -1;
+                if (intersects.length > 0) {
+                    const hitEye = selectionEyes.find(se => se.mesh === intersects[0].object);
+                    if (hitEye) {
+                        castBreed = hitEye.breed;
+                    }
+                }
+
+                if (castBreed !== hoveredBreedIndex) {
+                    setHoveredBreed(castBreed);
+                }
+
+                selectionEyes.forEach(se => {
+                    const isHovered = se.breed === hoveredBreedIndex;
+                    
+                    const floatOffset = Math.sin(timeSec * 2.5 + se.breed * 1.5) * 0.08;
+                    se.mesh.position.y = se.originalY + floatOffset;
+
+                    const targetScaleFactor = isHovered ? 1.25 : 1.0;
+                    se.scale.lerp(new THREE.Vector3(targetScaleFactor, targetScaleFactor, targetScaleFactor), 0.1 * fpsScale);
+                    se.mesh.scale.copy(se.scale);
+
+                    const targetLook = new THREE.Vector3(mouse.x * 5, mouse.y * 3, 14.5);
+                    const lookRotation = new THREE.Matrix4();
+                    lookRotation.lookAt(targetLook, se.mesh.position, camera.up);
+                    const targetQuaternion = new THREE.Quaternion().setFromRotationMatrix(lookRotation);
+                    const correction = new THREE.Quaternion().setFromEuler(se.baseRotationOffset);
+                    targetQuaternion.multiply(correction);
+
+                    se.mesh.quaternion.slerp(targetQuaternion, 0.08 * fpsScale);
+                });
+
+                const detailsPanel = document.getElementById('specimen-details');
+                if (hoveredBreedIndex !== -1) {
+                    const activeEye = selectionEyes.find(se => se.breed === hoveredBreedIndex);
+                    if (activeEye) {
+                        const tempV = new THREE.Vector3();
+                        tempV.copy(activeEye.mesh.position);
+                        tempV.y -= 0.52; 
+                        tempV.project(camera);
+
+                        const x = (tempV.x * 0.5 + 0.5) * window.innerWidth;
+                        const y = (tempV.y * -0.5 + 0.5) * window.innerHeight;
+
+                        detailsPanel.style.left = `${x}px`;
+                        detailsPanel.style.top = `${y}px`;
+                        detailsPanel.classList.remove('opacity-0', 'pointer-events-none');
+                        detailsPanel.classList.add('opacity-100', 'translate-y-0');
+                    }
+                } else {
+                    detailsPanel.classList.add('opacity-0', 'translate-y-2');
+                    detailsPanel.classList.remove('opacity-100', 'translate-y-0');
+                }
+
+            } else if (gameState === 'TRANSITION_ZOOM') {
+                transitionTimer += dt;
+                const transitionProgress = Math.min(1.0, transitionTimer / 1.1);
+
+                const ease = smoothstep(0, 1, transitionProgress);
+                camera.position.lerpVectors(zoomStartCamPos, zoomTargetCamPos, ease);
+                
+                const selectedEye = selectionEyes.find(e => e.breed === selectedBreed);
+                camera.lookAt(selectedEye.mesh.position);
+
+                if (transitionProgress >= 1.0) {
+                    gameState = 'INTRO';
+                    
+                    scene.remove(selectionGroup);
+                    selectionEyes.forEach(se => {
+                        se.mesh.geometry.dispose();
+                        se.mesh.material.dispose();
+                    });
+                    selectionGroup = null;
+                    selectionEyes = [];
+                    selectionLights = [];
+
+                    spawnEyeballs(); 
+                    createIntroPneumaticTube();
+                }
+
+            } else if (gameState === 'INTRO') {
                 let flickerIntensity = 0;
                 if (timeSec < 0.7) {
                     const burst = Math.sin(timeSec * 55) * Math.sin(timeSec * 14);
@@ -1875,7 +2396,6 @@
                 if (tubeLightMat) tubeLightMat.color.setHex(flickerIntensity > 0.5 ? 0xffffff : 0x1a1a1f);
 
                 if (introProgress < 1.0) {
-                    // POV TRAVERSAL: 2.2 second duration snake conduit run
                     introProgress += dt / 2.2;
                     if (introProgress > 1.0) introProgress = 1.0;
 
@@ -1889,22 +2409,19 @@
                         introEyeballMesh.rotateZ(timeSec * 14.5);
                     }
 
-                    // TIGHT CLAUSTROPHOBIC trailing POV: Camera sit strictly behind eyeball (clampedProg - 0.14)
                     const camProg = Math.max(0.0, introProgress - 0.14);
                     const camPos = tubeSpline.getPointAt(camProg);
                     camera.position.copy(camPos);
                     
                     if (introEyeballMesh) camera.lookAt(introEyeballMesh.position);
 
-                    // Map internal flashlight/pointlight right behind camera POV inside the tight concrete walls
                     if (introLight) {
                         introLight.position.copy(camPos).add(new THREE.Vector3(0, 0.2, 0.1));
-                        introLight.intensity = flickerIntensity * 2.2; // Extra intensity inside opaque tunnel
+                        introLight.intensity = flickerIntensity * 2.2; 
                         introLight.distance = 6.0;
                     }
 
                 } else if (transitionProgress < 1.0) {
-                    // SMOOTH 0.6s camera pan-out transition to regular pit orbital view
                     transitionProgress += dt / 0.6;
                     if (transitionProgress >= 1.0) {
                         transitionProgress = 1.0;
@@ -1918,7 +2435,6 @@
                     const targetCamPos = new THREE.Vector3(mouse.x * 1.8 + breatheX, mouse.y * 1.8 + breatheY, 15.0 + breatheZ);
                     const targetLookAt = new THREE.Vector3(0, -1, 0);
 
-                    // Traces perfectly out of the permanent ceiling exit flange
                     const exitCamPos = tubeSpline.getPointAt(0.92);
                     const exitLookAt = tubeSpline.getPointAt(1.0);
 
@@ -1928,8 +2444,7 @@
                     const curLook = new THREE.Vector3().lerpVectors(exitLookAt, targetLookAt, easeStep);
                     camera.lookAt(curLook);
                 }
-            } else {
-                // STANDARD CAMERA BREATHING LOOP
+            } else if (gameState === 'PLAY') {
                 const breatheX = Math.sin(timeSec * 0.65) * 0.12;
                 const breatheY = Math.cos(timeSec * 0.5) * 0.08;
                 const breatheZ = Math.sin(timeSec * 0.3) * 0.06;
@@ -1940,62 +2455,70 @@
                 camera.lookAt(0, -1, 0);
             }
 
-            // Normal container flickering spot ballast calculations
-            let ceilingBaseStrength = 4.0;
-            let tubeColorHex = 0xffffff; 
+            if (gameState === 'PLAY' || gameState === 'INTRO') {
+                let ceilingBaseStrength = 4.0;
+                let tubeColorHex = 0xffffff; 
 
-            let microOscillation = Math.sin(timeSec * 115.0) * 0.15 + Math.sin(timeSec * 67.3) * 0.1;
-            
-            let voltageWave = Math.sin(timeSec * 0.95) * Math.sin(timeSec * 2.7);
-            let dropMultiplier = 1.0;
-            if (voltageWave > 0.5) {
-                dropMultiplier = 0.28 + Math.random() * 0.35; 
-            }
-
-            if (Math.random() < 0.015) {
-                dropMultiplier = 0.02 + Math.random() * 0.15; 
-            }
-
-            let finalCeilingIntensity = (ceilingBaseStrength + microOscillation) * dropMultiplier;
-
-            if (finalCeilingIntensity < 0.45) {
-                tubeColorHex = 0x222233; 
-            } else {
-                tubeColorHex = 0xffffff; 
-            }
-
-            mainCeilingLight.intensity = finalCeilingIntensity;
-            lightTubeMesh.material.color.setHex(tubeColorHex);
-
-            if (neonLight && neonTubeMesh && timestamp) {
-                const vibSpeed = timestamp * 0.07;
-                const dx = Math.sin(vibSpeed) * 0.006;
-                const dy = Math.cos(vibSpeed * 1.4) * 0.006;
-
-                neonTubeMesh.position.set(dx, 3.2 + dy, -5.35);
-                neonLight.position.set(dx, 3.2 + dy, -5.25);
-
-                let baseNeon = 3.0;
-                let breath = Math.sin(timeSec * 1.8) * 0.35 
-                           + Math.sin(timeSec * 8.3) * 0.18 
-                           + Math.sin(timeSec * 29.5) * 0.12;
+                let microOscillation = Math.sin(timeSec * 115.0) * 0.15 + Math.sin(timeSec * 67.3) * 0.1;
                 
-                let gasSpit = 1.0;
-                if (Math.sin(timeSec * 1.1) * Math.cos(timeSec * 5.7) > 0.58) {
-                    gasSpit = 0.3 + Math.random() * 0.65;
-                }
-                if (Math.random() < 0.008) {
-                    gasSpit = 0.08;
+                let voltageWave = Math.sin(timeSec * 0.95) * Math.sin(timeSec * 2.7);
+                let dropMultiplier = 1.0;
+                if (voltageWave > 0.5) {
+                    dropMultiplier = 0.28 + Math.random() * 0.35; 
                 }
 
-                neonLight.intensity = (baseNeon + breath) * gasSpit;
-                if (neonTubeMesh.material) {
-                    neonTubeMesh.material.emissiveIntensity = (5.0 + breath * 1.6) * gasSpit;
+                if (Math.random() < 0.015) {
+                    dropMultiplier = 0.02 + Math.random() * 0.15; 
                 }
+
+                let finalCeilingIntensity = (ceilingBaseStrength + microOscillation) * dropMultiplier;
+
+                if (finalCeilingIntensity < 0.45) {
+                    tubeColorHex = 0x222233; 
+                } else {
+                    tubeColorHex = 0xffffff; 
+                }
+
+                mainCeilingLight.intensity = finalCeilingIntensity;
+                lightTubeMesh.material.color.setHex(tubeColorHex);
+
+                if (neonLight && neonTubeMesh && timestamp) {
+                    const vibSpeed = timestamp * 0.07;
+                    const dx = Math.sin(vibSpeed) * 0.006;
+                    const dy = Math.cos(vibSpeed * 1.4) * 0.006;
+
+                    neonTubeMesh.position.set(dx, 3.2 + dy, -5.35);
+                    neonLight.position.set(dx, 3.2 + dy, -5.25);
+
+                    let baseNeon = 3.0;
+                    let breath = Math.sin(timeSec * 1.8) * 0.35 
+                               + Math.sin(timeSec * 8.3) * 0.18 
+                               + Math.sin(timeSec * 29.5) * 0.12;
+                    
+                    let gasSpit = 1.0;
+                    if (Math.sin(timeSec * 1.1) * Math.cos(timeSec * 5.7) > 0.58) {
+                        gasSpit = 0.3 + Math.random() * 0.65;
+                    }
+                    if (Math.random() < 0.008) {
+                        gasSpit = 0.08;
+                    }
+
+                    neonLight.intensity = (baseNeon + breath) * gasSpit;
+                    if (neonTubeMesh.material) {
+                        neonTubeMesh.material.emissiveIntensity = (5.0 + breath * 1.6) * gasSpit;
+                    }
+                }
+            } else {
+                mainCeilingLight.intensity = 0.15;
+                lightTubeMesh.material.color.setHex(0x111116);
+                if (neonLight) neonLight.intensity = 0.0;
+                if (neonTubeMesh && neonTubeMesh.material) neonTubeMesh.material.emissiveIntensity = 0.0;
+                if (floorBounceLight) floorBounceLight.intensity = 0.0;
             }
 
-            // Step the physical world using the dynamic time delta
-            world.step(fixedTimeStep, Math.min(dt, 0.1), 3);
+            if (gameState === 'PLAY' || gameState === 'INTRO') {
+                world.step(fixedTimeStep, Math.min(dt, 0.1), 3);
+            }
 
             if (currentlyDraggedBody) {
                 currentlyDraggedBody.angularVelocity.set(0, 0, 0);
@@ -2052,7 +2575,7 @@
             const batchSize    = 1;
             const heavyChance  = isAgitating ? (0.02 * fpsScale) : (0.005 * fpsScale);
 
-            if (isCeilingDelugeActive && Math.random() < delugeChance) {
+            if (gameState === 'PLAY' && isCeilingDelugeActive && Math.random() < delugeChance) {
                 const isHeavyDrop = Math.random() < heavyChance;
                 if (isHeavyDrop) {
                     const startPos = new THREE.Vector3(
@@ -2086,6 +2609,7 @@
                     if (dropY <= bloodLevel) {
                         if (drop.isHeavy) {
                             addRipple(drop.mesh.position.x, drop.mesh.position.z, 0.55);
+                            playImpactSound(0.4);
                             const splashPos = new THREE.Vector3(
                                 drop.mesh.position.x, bloodLevel + 0.15, drop.mesh.position.z
                             );
@@ -2116,7 +2640,6 @@
                 }
             }
 
-            // Splatters decay loop
             for (let i = splatters.length - 1; i >= 0; i--) {
                 const s = splatters[i];
                 if (!s || !s.mesh) continue;
@@ -2171,97 +2694,95 @@
 
             const screenGazeTarget = new THREE.Vector3(mouse.x * 6, mouse.y * 6, 4);
 
-            eyeballs.forEach(eyeball => {
-                eyeball.mesh.position.copy(eyeball.body.position);
-                
-                const ballY = eyeball.body.position.y;
-                const submersionDepth = bloodLevel - (ballY - CONFIG.ballRadius);
-                const isSubmerged = submersionDepth > 0;
-                
-                const prevSubmerged = eyeball.isSubmerged || false;
-                eyeball.isSubmerged = isSubmerged;
-
-                if (isSubmerged && !prevSubmerged) {
-                    const entryVel = Math.abs(eyeball.body.velocity.y);
-                    if (entryVel > 0.4) {
-                        addRipple(eyeball.body.position.x, eyeball.body.position.z, Math.min(1.3, entryVel * 0.16));
-                        triggerBloodBurst(new THREE.Vector3(eyeball.body.position.x, bloodLevel + 0.15, eyeball.body.position.z), Math.min(7, Math.floor(entryVel * 1.4)));
-                    }
-                }
-                
-                if (isSubmerged) {
-                    const buoyantForce = submersionDepth * 40; 
-                    eyeball.body.force.y += buoyantForce;
+            if (gameState === 'PLAY' || gameState === 'INTRO') {
+                eyeballs.forEach(eyeball => {
+                    eyeball.mesh.position.copy(eyeball.body.position);
                     
-                    const dragFactorX = Math.pow(0.97, fpsScale);
-                    const dragFactorY = Math.pow(0.95, fpsScale);
-                    eyeball.body.velocity.x *= dragFactorX;
-                    eyeball.body.velocity.y *= dragFactorY;
-                    eyeball.body.velocity.z *= dragFactorX;
-                    eyeball.body.angularVelocity.scale(Math.pow(0.96, fpsScale), eyeball.body.angularVelocity);
+                    const ballY = eyeball.body.position.y;
+                    const submersionDepth = bloodLevel - (ballY - CONFIG.ballRadius);
+                    const isSubmerged = submersionDepth > 0;
+                    
+                    const prevSubmerged = eyeball.isSubmerged || false;
+                    eyeball.isSubmerged = isSubmerged;
 
-                    eyeball.bloodiness = Math.min(1.0, eyeball.bloodiness + 0.008 * fpsScale);
-
-                    // Continuous slow-motion churning turbulence when Agitate is active!
-                    if (isAgitating) {
-                        const swirlAngle = timeSec * 1.5 + eyeball.body.position.y * 0.1;
-                        // Swirl force
-                        eyeball.body.force.x += Math.cos(swirlAngle) * 5.0 * fpsScale;
-                        eyeball.body.force.z += Math.sin(swirlAngle) * 5.0 * fpsScale;
-                        // Gentle bubbling lift
-                        eyeball.body.force.y += (Math.sin(timeSec * 2.0 + eyeball.body.position.x) * 2.0 + 3.0) * fpsScale;
+                    if (isSubmerged && !prevSubmerged) {
+                        const entryVel = Math.abs(eyeball.body.velocity.y);
+                        if (entryVel > 0.4) {
+                            addRipple(eyeball.body.position.x, eyeball.body.position.z, Math.min(1.3, entryVel * 0.16));
+                            triggerBloodBurst(new THREE.Vector3(eyeball.body.position.x, bloodLevel + 0.15, eyeball.body.position.z), Math.min(7, Math.floor(entryVel * 1.4)));
+                        }
                     }
-                } else {
-                    if (isAgitating) {
-                        eyeball.body.force.x += (Math.random() - 0.5) * 1.5 * fpsScale;
-                        eyeball.body.force.z += (Math.random() - 0.5) * 1.5 * fpsScale;
-                    }
-                }
-
-                // Anti-stuck safeguard
-                if (ballY > -4.5 && !isSubmerged && eyeball.body !== currentlyDraggedBody) {
-                    const velLength = eyeball.body.velocity.length();
-                    if (velLength < 0.05) {
-                        eyeball.body.force.y -= 3.0 * fpsScale;
-                        eyeball.body.force.x -= eyeball.body.position.x * 0.5 * fpsScale;
-                        eyeball.body.force.z -= eyeball.body.position.z * 0.5 * fpsScale;
-                        eyeball.body.angularVelocity.set(0.1, 0.1, 0.1);
-                    }
-                }
-
-                const depthFactor = THREE.MathUtils.clamp((ballY - (-6.0)) / 5.2, 0.08, 1.0);
-
-                if (eyeball.mesh.material) {
-                    const baseColor = new THREE.Color(0xffffff).lerp(new THREE.Color(0x3d0101), eyeball.bloodiness);
-                    eyeball.mesh.material.color.copy(baseColor).multiplyScalar(depthFactor);
-
-                    if (eyeball.breed === 2 || eyeball.breed === 3) {
-                        const darkEmissive = eyeball.targetEmissive.clone()
-                            .lerp(new THREE.Color(0x220000), eyeball.bloodiness)
-                            .multiplyScalar(depthFactor);
-                        eyeball.mesh.material.emissive.copy(darkEmissive);
-                    }
-                }
-
-                if (eyeball.body !== currentlyDraggedBody) {
-                    if (eyeball.body.velocity.length() > 2.5) {
-                        eyeball.mesh.quaternion.copy(eyeball.body.quaternion);
-                    } else {
-                        const lookRotation = new THREE.Matrix4();
-                        lookRotation.lookAt(screenGazeTarget, eyeball.mesh.position, camera.up);
+                    
+                    if (isSubmerged) {
+                        const buoyantForce = submersionDepth * 40; 
+                        eyeball.body.force.y += buoyantForce;
                         
-                        const targetQuaternion = new THREE.Quaternion().setFromRotationMatrix(lookRotation);
-                        const correction = new THREE.Quaternion().setFromEuler(eyeball.baseRotationOffset);
-                        targetQuaternion.multiply(correction);
+                        const dragFactorX = Math.pow(0.97, fpsScale);
+                        const dragFactorY = Math.pow(0.95, fpsScale);
+                        eyeball.body.velocity.x *= dragFactorX;
+                        eyeball.body.velocity.y *= dragFactorY;
+                        eyeball.body.velocity.z *= dragFactorX;
+                        eyeball.body.angularVelocity.scale(Math.pow(0.96, fpsScale), eyeball.body.angularVelocity);
 
-                        const slerpFactor = 1.0 - Math.pow(1.0 - 0.08, fpsScale);
-                        eyeball.mesh.quaternion.slerp(targetQuaternion, slerpFactor);
-                        eyeball.body.quaternion.copy(eyeball.mesh.quaternion);
+                        eyeball.bloodiness = Math.min(1.0, eyeball.bloodiness + 0.008 * fpsScale);
+
+                        if (isAgitating) {
+                            const swirlAngle = timeSec * 1.5 + eyeball.body.position.y * 0.1;
+                            eyeball.body.force.x += Math.cos(swirlAngle) * 5.0 * fpsScale;
+                            eyeball.body.force.z += Math.sin(swirlAngle) * 5.0 * fpsScale;
+                            eyeball.body.force.y += (Math.sin(timeSec * 2.0 + eyeball.body.position.x) * 2.0 + 3.0) * fpsScale;
+                        }
+                    } else {
+                        if (isAgitating) {
+                            eyeball.body.force.x += (Math.random() - 0.5) * 1.5 * fpsScale;
+                            eyeball.body.force.z += (Math.random() - 0.5) * 1.5 * fpsScale;
+                        }
                     }
-                } else {
-                    eyeball.mesh.quaternion.copy(eyeball.body.quaternion);
-                }
-            });
+
+                    if (ballY > -4.5 && !isSubmerged && eyeball.body !== currentlyDraggedBody) {
+                        const velLength = eyeball.body.velocity.length();
+                        if (velLength < 0.05) {
+                            eyeball.body.force.y -= 3.0 * fpsScale;
+                            eyeball.body.force.x -= eyeball.body.position.x * 0.5 * fpsScale;
+                            eyeball.body.force.z -= eyeball.body.position.z * 0.5 * fpsScale;
+                            eyeball.body.angularVelocity.set(0.1, 0.1, 0.1);
+                        }
+                    }
+
+                    const depthFactor = THREE.MathUtils.clamp((ballY - (-6.0)) / 5.2, 0.08, 1.0);
+
+                    if (eyeball.mesh.material) {
+                        const baseColor = new THREE.Color(0xffffff).lerp(new THREE.Color(0x3d0101), eyeball.bloodiness);
+                        eyeball.mesh.material.color.copy(baseColor).multiplyScalar(depthFactor);
+
+                        if (eyeball.breed === 2 || eyeball.breed === 3) {
+                            const darkEmissive = eyeball.targetEmissive.clone()
+                                .lerp(new THREE.Color(0x220000), eyeball.bloodiness)
+                                .multiplyScalar(depthFactor);
+                            eyeball.mesh.material.emissive.copy(darkEmissive);
+                        }
+                    }
+
+                    if (eyeball.body !== currentlyDraggedBody) {
+                        if (eyeball.body.velocity.length() > 2.5) {
+                            eyeball.mesh.quaternion.copy(eyeball.body.quaternion);
+                        } else {
+                            const lookRotation = new THREE.Matrix4();
+                            lookRotation.lookAt(screenGazeTarget, eyeball.mesh.position, camera.up);
+                            
+                            const targetQuaternion = new THREE.Quaternion().setFromRotationMatrix(lookRotation);
+                            const correction = new THREE.Quaternion().setFromEuler(eyeball.baseRotationOffset);
+                            targetQuaternion.multiply(correction);
+
+                            const slerpFactor = 1.0 - Math.pow(1.0 - 0.08, fpsScale);
+                            eyeball.mesh.quaternion.slerp(targetQuaternion, slerpFactor);
+                            eyeball.body.quaternion.copy(eyeball.mesh.quaternion);
+                        }
+                    } else {
+                        eyeball.mesh.quaternion.copy(eyeball.body.quaternion);
+                    }
+                });
+            }
 
             if (dragJoint && currentlyDraggedBody) {
                 const dragY = dummyBody.position.y;
@@ -2301,12 +2822,10 @@
             initPhysics();
             initThree();
             createDungeonRoom();
-            spawnEyeballs();
             createBloodPool();
             setupInteractions();
             
-            // Build pneumatic snake spline track overlay
-            createIntroPneumaticTube();
+            initSelectionScene();
 
             adjustBloodVolume(0);
             animate();
@@ -2315,9 +2834,14 @@
                 const loader = document.getElementById('loader');
                 if (loader) {
                     loader.classList.add('opacity-0');
-                    setTimeout(() => loader.remove(), 1000);
+                    setTimeout(() => {
+                        loader.remove();
+                        gameState = 'SELECT';
+                        const selectUI = document.getElementById('ui-selection');
+                        selectUI.classList.remove('opacity-0', 'pointer-events-none');
+                    }, 1000);
                 }
-            }, 600);
+            }, 800);
         }
 
         if (document.readyState === 'loading') {
